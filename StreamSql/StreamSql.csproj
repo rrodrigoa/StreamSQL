@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.SqlServer.TransactSql.ScriptDom" Version="161.8907.0" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('..\\Trill\\src\\Microsoft.StreamProcessing\\Microsoft.StreamProcessing.csproj')">
+    <ProjectReference Include="..\\Trill\\src\\Microsoft.StreamProcessing\\Microsoft.StreamProcessing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="!Exists('..\\Trill\\src\\Microsoft.StreamProcessing\\Microsoft.StreamProcessing.csproj')">
+    <PackageReference Include="Microsoft.StreamProcessing" Version="2.0.0" />
+  </ItemGroup>
+</Project>
