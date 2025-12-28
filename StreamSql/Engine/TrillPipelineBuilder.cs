@@ -76,19 +76,46 @@ public sealed class TrillPipelineBuilder
 
     private long ResolveTimestamp(JsonElement element, long arrivalTime)
     {
-        if (element.ValueKind == JsonValueKind.Object && element.TryGetProperty(_timestampField, out var property))
+        if (TryResolveTimestamp(element, _timestampField, out var resolved))
         {
-            if (property.ValueKind == JsonValueKind.Number && property.TryGetInt64(out var numeric))
-            {
-                return numeric;
-            }
-
-            if (property.ValueKind == JsonValueKind.String && DateTimeOffset.TryParse(property.GetString(), out var parsed))
-            {
-                return parsed.ToUnixTimeMilliseconds();
-            }
+            return resolved;
         }
 
         return arrivalTime;
+    }
+
+    private static bool TryResolveTimestamp(JsonElement element, string fieldPath, out long timestamp)
+    {
+        timestamp = 0;
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        var current = element;
+        var segments = fieldPath.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var segment in segments)
+        {
+            if (current.ValueKind != JsonValueKind.Object || !current.TryGetProperty(segment, out var next))
+            {
+                return false;
+            }
+
+            current = next;
+        }
+
+        if (current.ValueKind == JsonValueKind.Number && current.TryGetInt64(out var numeric))
+        {
+            timestamp = numeric;
+            return true;
+        }
+
+        if (current.ValueKind == JsonValueKind.String && DateTimeOffset.TryParse(current.GetString(), out var parsed))
+        {
+            timestamp = parsed.ToUnixTimeMilliseconds();
+            return true;
+        }
+
+        return false;
     }
 }

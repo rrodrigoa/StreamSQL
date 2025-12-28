@@ -4,10 +4,18 @@ namespace StreamSql.Input;
 
 public static class StreamReaderFactory
 {
+    public static Stream? InputOverride { get; set; }
+    public static Stream? OutputOverride { get; set; }
+
     public static Stream OpenInput(CommandLineOptions options)
     {
         if (string.IsNullOrWhiteSpace(options.InputFilePath))
         {
+            if (InputOverride is not null)
+            {
+                return InputOverride;
+            }
+
             return Console.OpenStandardInput();
         }
 
@@ -18,6 +26,11 @@ public static class StreamReaderFactory
     {
         if (string.IsNullOrWhiteSpace(options.OutputFilePath))
         {
+            if (OutputOverride is not null)
+            {
+                return OutputOverride;
+            }
+
             return Console.OpenStandardOutput();
         }
 
