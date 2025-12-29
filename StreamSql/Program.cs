@@ -31,8 +31,12 @@ public static class Program
         await using var outputStream = StreamReaderFactory.OpenOutput(options);
         var jsonWriter = new JsonLineWriter(outputStream);
 
-        var timestampField = options.EventTimeField ?? plan.TimestampField ?? "timestamp";
-        var pipeline = new TrillPipelineBuilder(timestampField, options.Follow, plan);
+        var timestampField = options.EventTimeField ?? "timestamp";
+        var pipeline = new TrillPipelineBuilder(
+            timestampField,
+            options.Follow,
+            plan,
+            options.TumblingWindow);
         var results = pipeline.ExecuteAsync(jsonReader.ReadAllAsync());
 
         await jsonWriter.WriteAllAsync(results);

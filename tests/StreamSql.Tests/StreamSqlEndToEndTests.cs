@@ -11,7 +11,7 @@ public class StreamSqlEndToEndTests
     [Fact]
     public async Task ExecutesQueryWithWhereAndTimestampByUsingDefaultStreams()
     {
-        var sql = "SELECT data.value INTO output FROM input where data.value > 5 TIMESTAMP BY data.timestamp";
+        var sql = "SELECT data.value INTO output FROM input where data.value > 5";
         var payload = "{\"timestamp\":1,\"value\":4}\n{\"timestamp\":2,\"value\":6}\n";
 
         await using var inputStream = new MemoryStream(Encoding.UTF8.GetBytes(payload));
@@ -21,7 +21,7 @@ public class StreamSqlEndToEndTests
 
         try
         {
-            var exitCode = await Program.Main(new[] { "--query", sql });
+            var exitCode = await Program.Main(new[] { "--query", sql, "--timestamp-by", "timestamp" });
 
             Assert.Equal(0, exitCode);
 
