@@ -68,6 +68,14 @@ public sealed class TrillPipelineBuilder
             }
         }
 
+        AppendInfinityPunctuation(buffer);
+        foreach (var output in ExecuteBatch(buffer))
+        {
+            yield return output;
+        }
+
+        buffer.Clear();
+
         if (_follow)
         {
             // Follow mode uses batching to avoid unbounded memory. The loop ends only when input completes.
@@ -203,6 +211,19 @@ public sealed class TrillPipelineBuilder
                 yield return output;
             }
         }
+
+        AppendInfinityPunctuation(buffer);
+        foreach (var output in ExecuteBatch(buffer))
+        {
+            yield return output;
+        }
+
+        buffer.Clear();
+    }
+
+    private static void AppendInfinityPunctuation(List<StreamEvent<JsonElement>> buffer)
+    {
+        buffer.Add(StreamEvent.CreatePunctuation<JsonElement>(StreamEvent.InfinitySyncTime));
     }
 
     private long ResolveTimestamp(JsonElement element, long arrivalTime)
