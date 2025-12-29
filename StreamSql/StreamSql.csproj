@@ -6,15 +6,16 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Microsoft.SqlServer.TransactSql.ScriptDom" Version="161.8907.0" />
-  </ItemGroup>
-
   <ItemGroup Condition="Exists('..\\Trill\\src\\Microsoft.StreamProcessing\\Microsoft.StreamProcessing.csproj')">
     <ProjectReference Include="..\\Trill\\src\\Microsoft.StreamProcessing\\Microsoft.StreamProcessing.csproj" />
   </ItemGroup>
 
-  <ItemGroup Condition="!Exists('..\\Trill\\src\\Microsoft.StreamProcessing\\Microsoft.StreamProcessing.csproj')">
-    <PackageReference Include="Microsoft.StreamProcessing" Version="2.0.0" />
+  <ItemGroup>
+    <PackageReference Include="Microsoft.SqlServer.TransactSql.ScriptDom" Version="170.147.0" />
+    <PackageReference Include="System.Reactive.Linq" Version="6.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Trill\Sources\Core\Microsoft.StreamProcessing\Microsoft.StreamProcessing.csproj" />
   </ItemGroup>
 </Project>

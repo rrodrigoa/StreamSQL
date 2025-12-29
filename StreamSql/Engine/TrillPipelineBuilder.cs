@@ -2,6 +2,7 @@ using Microsoft.StreamProcessing;
 using StreamSql.Input;
 using StreamSql.Sql;
 using System.Text.Json;
+using System.Reactive.Linq;
 
 namespace StreamSql.Engine;
 
@@ -51,17 +52,17 @@ public sealed class TrillPipelineBuilder
         }
     }
 
-    private IEnumerable<JsonElement> ExecuteBatch(IReadOnlyCollection<StreamEvent<JsonElement>> batch)
+    private IEnumerable<JsonElement> ExecuteBatch(List<StreamEvent<JsonElement>> batch)
     {
-        var streamable = Streamable.Create(batch);
+        var streamable = batch.ToObservable().ToStreamable();
         var translated = SqlToTrillTranslator.ApplyPlan(streamable, _plan);
 
         foreach (var streamEvent in translated.ToEnumerable())
         {
-            if (streamEvent.IsData)
-            {
-                yield return streamEvent.Payload;
-            }
+            //if (streamEvent.IsData)
+            //{
+            yield return streamEvent;
+            //}
         }
     }
 
