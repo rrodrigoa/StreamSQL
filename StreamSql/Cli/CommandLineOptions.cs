@@ -8,6 +8,7 @@ public sealed class CommandLineOptions
     public bool Follow { get; init; }
     public string? OutputFilePath { get; init; }
     public string? EventTimeField { get; init; }
+    public TimeSpan? TumblingWindow { get; init; }
 
     public static bool TryParse(string[] args, out CommandLineOptions? options, out string? error)
     {
@@ -16,7 +17,7 @@ public sealed class CommandLineOptions
 
         if (args.Length == 0)
         {
-            error = "Usage: streamsql [--query \"SQL\"] [--file path] [--follow] [--out path] [--event-time field] <query.sql>";
+            error = "Usage: streamsql [--query \"SQL\"] [--file path] [--follow] [--out path] [--timestamp-by field] [--tumbling-window duration] <query.sql>";
             return false;
         }
 
@@ -25,6 +26,7 @@ public sealed class CommandLineOptions
         string? inputFilePath = null;
         string? outputFilePath = null;
         string? eventTimeField = null;
+        TimeSpan? tumblingWindow = null;
         var follow = false;
 
         var remaining = new List<string>();
@@ -53,7 +55,24 @@ public sealed class CommandLineOptions
                     }
                     break;
                 case "--event-time":
-                    if (!TryReadValue(args, ref i, out eventTimeField, out error))
+                case "--timestamp-by":
+                    if (!TryReadValue(args, ref i, out var candidateField, out error))
+                    {
+                        return false;
+                    }
+                    if (!string.IsNullOrWhiteSpace(eventTimeField))
+                    {
+                        error = "Only one of --event-time or --timestamp-by can be specified.";
+                        return false;
+                    }
+                    eventTimeField = candidateField;
+                    break;
+                case "--tumbling-window":
+                    if (!TryReadValue(args, ref i, out var rawWindow, out error))
+                    {
+                        return false;
+                    }
+                    if (!TryParseWindow(rawWindow!, out tumblingWindow, out error))
                     {
                         return false;
                     }
@@ -91,7 +110,8 @@ public sealed class CommandLineOptions
             InputFilePath = inputFilePath,
             Follow = follow,
             OutputFilePath = outputFilePath,
-            EventTimeField = eventTimeField
+            EventTimeField = eventTimeField,
+            TumblingWindow = tumblingWindow
         };
 
         return true;
@@ -110,5 +130,26 @@ public sealed class CommandLineOptions
 
         value = args[++index];
         return true;
+    }
+
+    private static bool TryParseWindow(string value, out TimeSpan? window, out string? error)
+    {
+        error = null;
+        window = null;
+
+        if (long.TryParse(value, out var milliseconds) && milliseconds > 0)
+        {
+            window = TimeSpan.FromMilliseconds(milliseconds);
+            return true;
+        }
+
+        if (TimeSpan.TryParse(value, out var parsed) && parsed > TimeSpan.Zero)
+        {
+            window = parsed;
+            return true;
+        }
+
+        error = "Invalid tumbling window duration. Provide a positive millisecond value or a TimeSpan.";
+        return false;
     }
 }

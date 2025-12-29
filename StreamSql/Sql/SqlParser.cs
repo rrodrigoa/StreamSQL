@@ -26,20 +26,20 @@ public static class SqlParser
 
         return new SqlPlan(
             sql,
-            visitor.TimestampField,
             visitor.InputStream,
             visitor.OutputStream,
             visitor.SelectedFields,
-            visitor.Filter);
+            visitor.Filter,
+            visitor.Aggregate);
     }
 
     private sealed class SqlValidationVisitor : TSqlFragmentVisitor
     {
         public List<string> Unsupported { get; } = new();
-        public string? TimestampField { get; private set; }
         public string? InputStream { get; private set; }
         public string? OutputStream { get; private set; }
         public List<SelectedField> SelectedFields { get; } = new();
+        public AggregateDefinition? Aggregate { get; private set; }
         public FilterDefinition? Filter { get; private set; }
 
         public override void ExplicitVisit(QuerySpecification node)
@@ -59,21 +59,44 @@ public static class SqlParser
                     continue;
                 }
 
-                if (scalar.Expression is not ColumnReferenceExpression column)
+                if (scalar.Expression is ColumnReferenceExpression column)
                 {
-                    Unsupported.Add("SELECT expression");
+                    var fieldReference = BuildFieldReference(column, InputStream);
+                    if (fieldReference is null)
+                    {
+                        Unsupported.Add("SELECT column");
+                        continue;
+                    }
+
+                    var outputName = scalar.ColumnName?.Value ?? fieldReference.PathSegments.Last();
+                    SelectedFields.Add(new SelectedField(fieldReference, outputName));
                     continue;
                 }
 
-                var fieldReference = BuildFieldReference(column, InputStream);
-                if (fieldReference is null)
+                if (scalar.Expression is FunctionCall functionCall)
                 {
-                    Unsupported.Add("SELECT column");
+                    if (Aggregate is not null)
+                    {
+                        Unsupported.Add("SELECT multiple aggregates");
+                        continue;
+                    }
+
+                    if (!TryBuildAggregate(functionCall, scalar.ColumnName?.Value, InputStream, out var aggregate))
+                    {
+                        Unsupported.Add("SELECT aggregate");
+                        continue;
+                    }
+
+                    Aggregate = aggregate;
                     continue;
                 }
 
-                var outputName = scalar.ColumnName?.Value ?? fieldReference.PathSegments.Last();
-                SelectedFields.Add(new SelectedField(fieldReference, outputName));
+                Unsupported.Add("SELECT expression");
+            }
+
+            if (Aggregate is not null && SelectedFields.Count > 0)
+            {
+                Unsupported.Add("SELECT list with aggregate");
             }
 
             if (node.WhereClause is not null)
@@ -190,6 +213,31 @@ public static class SqlParser
                 default:
                     return false;
             }
+        }
+
+        private static bool TryBuildAggregate(FunctionCall functionCall, string? alias, string? inputStream, out AggregateDefinition? aggregate)
+        {
+            aggregate = null;
+
+            if (!string.Equals(functionCall.FunctionName.Value, "SUM", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (functionCall.Parameters.Count != 1 || functionCall.Parameters[0] is not ColumnReferenceExpression column)
+            {
+                return false;
+            }
+
+            var fieldReference = BuildFieldReference(column, inputStream);
+            if (fieldReference is null)
+            {
+                return false;
+            }
+
+            var outputName = alias ?? "sum";
+            aggregate = new AggregateDefinition(AggregateType.Sum, fieldReference, outputName);
+            return true;
         }
     }
 }
