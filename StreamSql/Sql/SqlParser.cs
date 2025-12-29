@@ -76,11 +76,6 @@ public static class SqlParser
                 SelectedFields.Add(new SelectedField(fieldReference, outputName));
             }
 
-            if (node.Into is not null)
-            {
-                OutputStream = GetSchemaObjectName(node.Into);
-            }
-
             if (node.WhereClause is not null)
             {
                 Filter = BuildFilter(node.WhereClause.SearchCondition, InputStream);
@@ -108,7 +103,6 @@ public static class SqlParser
 
             Unsupported.Add("FROM reference");
         }
-        }
 
         public override void ExplicitVisit(SelectStatement node)
         {
@@ -117,23 +111,10 @@ public static class SqlParser
             {
                 Unsupported.Add("Only simple SELECT statements are supported");
             }
-        }
-
-        public override void ExplicitVisit(TimestampByClause node)
-        {
-            if (node.Expression is ColumnReferenceExpression column)
+            if (node.Into is not null)
             {
-                var fieldReference = BuildFieldReference(column, InputStream);
-                if (fieldReference is not null)
-                {
-                    TimestampField = string.Join('.', fieldReference.PathSegments);
-                }
+                OutputStream = GetSchemaObjectName(node.Into);
             }
-        }
-
-        public override void ExplicitVisit(TumblingWindowClause node)
-        {
-            base.ExplicitVisit(node);
         }
 
         private static string? GetSchemaObjectName(SchemaObjectName? schemaObjectName)
