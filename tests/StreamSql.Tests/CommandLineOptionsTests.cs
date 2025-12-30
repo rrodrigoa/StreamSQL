@@ -28,4 +28,19 @@ public class CommandLineOptionsTests
         Assert.False(success);
         Assert.Equal("--follow can only be used with --file.", error);
     }
+
+    [Fact]
+    public void ParsesWindowDefinition()
+    {
+        var args = new[] { "--window", "sliding:10s,5s", "--query", "SELECT COUNT(*) FROM input" };
+
+        var success = CommandLineOptions.TryParse(args, out var options, out var error);
+
+        Assert.True(success, error);
+        Assert.NotNull(options);
+        Assert.NotNull(options!.Window);
+        Assert.Equal(WindowType.Sliding, options.Window!.Type);
+        Assert.Equal(TimeSpan.FromSeconds(10), options.Window.Size);
+        Assert.Equal(TimeSpan.FromSeconds(5), options.Window.Slide);
+    }
 }

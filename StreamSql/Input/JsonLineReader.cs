@@ -38,8 +38,15 @@ public sealed class JsonLineReader
 
             // Capture arrival time at read so downstream timestamp fallback uses the actual ingestion time.
             var arrivalTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            using var document = JsonDocument.Parse(line);
-            yield return new InputEvent(document.RootElement.Clone(), arrivalTime);
+            try
+            {
+                using var document = JsonDocument.Parse(line);
+                yield return new InputEvent(document.RootElement.Clone(), arrivalTime);
+            }
+            catch (JsonException exception)
+            {
+                throw new InvalidOperationException($"Invalid JSON input: {line}", exception);
+            }
         }
     }
 }

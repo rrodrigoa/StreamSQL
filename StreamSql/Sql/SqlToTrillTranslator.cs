@@ -11,35 +11,67 @@ public static class SqlToTrillTranslator
             ? source
             : source.Where(payload => MatchesFilter(payload, plan.Filter));
 
-        if (plan.SelectedFields.Count == 0)
+        if (plan.SelectItems.Count == 0)
         {
             return filtered;
         }
 
-        var output =  filtered.Select(payload => ProjectPayload(payload, plan.SelectedFields));
+        var output =  filtered.Select(payload => ProjectPayload(payload, plan.SelectItems));
         return output;
     }
 
     private static bool MatchesFilter(JsonElement payload, FilterDefinition filter)
     {
-        if (!TryGetProperty(payload, filter.Field.PathSegments, out var value))
+        foreach (var condition in filter.Conditions)
         {
-            return false;
+            if (!TryGetProperty(payload, condition.Field.PathSegments, out var value))
+            {
+                return false;
+            }
+
+            if (condition.Value.Kind == FilterValueKind.Number)
+            {
+                if (value.ValueKind != JsonValueKind.Number || !value.TryGetDouble(out var numeric))
+                {
+                    return false;
+                }
+
+                var expected = condition.Value.Number;
+                var match = condition.Operator switch
+                {
+                    FilterOperator.GreaterThan => numeric > expected,
+                    FilterOperator.LessThan => numeric < expected,
+                    FilterOperator.Equals => numeric.Equals(expected),
+                    _ => false
+                };
+
+                if (!match)
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                if (value.ValueKind != JsonValueKind.True && value.ValueKind != JsonValueKind.False)
+                {
+                    return false;
+                }
+
+                var actual = value.ValueKind == JsonValueKind.True;
+                var expected = condition.Value.Boolean;
+                var match = condition.Operator == FilterOperator.Equals && actual == expected;
+
+                if (!match)
+                {
+                    return false;
+                }
+            }
         }
 
-        if (value.ValueKind != JsonValueKind.Number || !value.TryGetDouble(out var numeric))
-        {
-            return false;
-        }
-
-        return filter.Operator switch
-        {
-            FilterOperator.GreaterThan => numeric > filter.Value,
-            _ => false
-        };
+        return true;
     }
 
-    private static JsonElement ProjectPayload(JsonElement payload, IReadOnlyList<SelectedField> fields)
+    private static JsonElement ProjectPayload(JsonElement payload, IReadOnlyList<SelectItem> fields)
     {
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
@@ -48,7 +80,13 @@ public static class SqlToTrillTranslator
 
             foreach (var field in fields)
             {
-                if (!TryGetProperty(payload, field.Source.PathSegments, out var value))
+                if (field.Kind != SelectItemKind.Field)
+                {
+                    continue;
+                }
+
+                var reference = field.Field!;
+                if (!TryGetProperty(payload, reference.PathSegments, out var value))
                 {
                     continue;
                 }
