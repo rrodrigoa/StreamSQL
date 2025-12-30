@@ -13,8 +13,8 @@ public class StreamSqlEndToEndTests
     [Fact]
     public async Task ExecutesQueryWithWhereAndTimestampByUsingDefaultStreams()
     {
-        var sql = "SELECT value INTO output FROM input where data.value > 5";
-        var payload = "{\"timestamp\":1,\"value\":4}\n{\"timestamp\":2,\"value\":6}";
+        var sql = "SELECT value INTO output FROM input where value > 5";
+        var payload = "{\"timestamp\":1,\"value\":4}\n{\"timestamp\":2,\"value\":6}\n{\"timestamp\":3,\"value\":7}";
 
         await using var inputStream = new MemoryStream(Encoding.UTF8.GetBytes(payload));
         await using var outputStream = new MemoryStream();
@@ -32,7 +32,7 @@ public class StreamSqlEndToEndTests
             var output = await reader.ReadToEndAsync();
             var lines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
 
-            Assert.Single(lines);
+            Assert.True(lines.Length == 2);
 
             using var document = JsonDocument.Parse(lines[0]);
             Assert.Equal(6, document.RootElement.GetProperty("value").GetInt32());
