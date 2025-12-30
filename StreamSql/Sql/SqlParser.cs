@@ -165,10 +165,6 @@ public static class SqlParser
                 {
                     identifiers.RemoveAt(0);
                 }
-                else
-                {
-                    identifiers.RemoveAt(0);
-                }
             }
 
             return new FieldReference(identifiers);

@@ -60,18 +60,13 @@ public sealed class TrillPipelineBuilder
             }
         }
 
+        AppendInfinityPunctuation(buffer);
         if (buffer.Count > 0)
         {
             foreach (var output in ExecuteBatch(buffer))
             {
                 yield return output;
             }
-        }
-
-        AppendInfinityPunctuation(buffer);
-        foreach (var output in ExecuteBatch(buffer))
-        {
-            yield return output;
         }
 
         buffer.Clear();
@@ -84,25 +79,27 @@ public sealed class TrillPipelineBuilder
 
     private IEnumerable<JsonElement> ExecuteBatch(List<StreamEvent<JsonElement>> batch)
     {
-        var streamable = batch.ToObservable().ToStreamable();
+        var streamable = batch.ToObservable().ToStreamable(
+            DisorderPolicy.Throw(),
+            FlushPolicy.FlushOnPunctuation,
+            PeriodicPunctuationPolicy.None());
         var translated = SqlToTrillTranslator.ApplyPlan(streamable, _plan);
 
-        foreach (var streamEvent in translated.ToEnumerable())
+        var outputArray = translated.ToStreamEventObservable().ToEnumerable();
+        foreach (var streamEvent in outputArray)
         {
-            //if (streamEvent.IsData)
-            //{
-            yield return streamEvent;
-            //}
+            if (streamEvent.IsData)
+            {
+                yield return streamEvent.Payload;
+            }
         }
     }
 
     private StreamEvent<JsonElement> CreateEvent(InputEvent inputEvent)
     {
         var timestamp = ResolveTimestamp(inputEvent.Payload, inputEvent.ArrivalTime);
-        var start = timestamp;
-        var end = timestamp + 1;
 
-        return StreamEvent.CreateInterval(start, end, inputEvent.Payload);
+        return StreamEvent.CreatePoint(timestamp, inputEvent.Payload);
     }
 
     private async IAsyncEnumerable<JsonElement> ExecuteBatchSumAsync(

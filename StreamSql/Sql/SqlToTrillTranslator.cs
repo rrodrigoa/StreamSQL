@@ -16,7 +16,8 @@ public static class SqlToTrillTranslator
             return filtered;
         }
 
-        return filtered.Select(payload => ProjectPayload(payload, plan.SelectedFields));
+        var output =  filtered.Select(payload => ProjectPayload(payload, plan.SelectedFields));
+        return output;
     }
 
     private static bool MatchesFilter(JsonElement payload, FilterDefinition filter)
@@ -61,7 +62,8 @@ public static class SqlToTrillTranslator
 
         stream.Position = 0;
         using var document = JsonDocument.Parse(stream);
-        return document.RootElement.Clone();
+        var clonedObject = document.RootElement.Clone();
+        return clonedObject;
     }
 
     private static bool TryGetProperty(JsonElement payload, IReadOnlyList<string> pathSegments, out JsonElement value)
