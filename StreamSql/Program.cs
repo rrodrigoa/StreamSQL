@@ -36,7 +36,7 @@ public static class Program
             timestampField,
             options.Follow,
             plan,
-            options.TumblingWindow);
+            options.Window);
         var results = pipeline.ExecuteAsync(jsonReader.ReadAllAsync());
 
         await jsonWriter.WriteAllAsync(results);
