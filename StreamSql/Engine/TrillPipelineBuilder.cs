@@ -45,6 +45,16 @@ public sealed class TrillPipelineBuilder
             yield break;
         }
 
+        if (_plan.OrderBy.Count > 0)
+        {
+            await foreach (var output in ExecuteOrderedProjectionAsync(input, cancellationToken))
+            {
+                yield return output;
+            }
+
+            yield break;
+        }
+
         await foreach (var output in ExecuteStreamingAsync(input, cancellationToken))
         {
             yield return output;
@@ -109,7 +119,8 @@ public sealed class TrillPipelineBuilder
             groups.Add(string.Empty, new AggregateBucket(new List<JsonElement>(), aggregates));
         }
 
-        foreach (var output in BuildAggregateOutputs(groups, includeWindow: false, windowStart: 0, windowEnd: 0))
+        var outputs = BuildAggregateOutputs(groups, includeWindow: false, windowStart: 0, windowEnd: 0);
+        foreach (var output in OrderOutputs(outputs))
         {
             yield return output;
         }
@@ -132,6 +143,16 @@ public sealed class TrillPipelineBuilder
 
         var windowSize = (long)_window!.Size.TotalMilliseconds;
         var slideSize = (long)(_window.Slide ?? _window.Size).TotalMilliseconds;
+        if (_window.Type == WindowType.Sliding)
+        {
+            await foreach (var output in ExecuteSlidingWindowAsync(input, windowSize, cancellationToken))
+            {
+                yield return output;
+            }
+
+            yield break;
+        }
+
         var windowBuckets = new Dictionary<(long WindowStart, long WindowEnd, string GroupKey), AggregateBucket>();
 
         await foreach (var inputEvent in input.WithCancellation(cancellationToken))
@@ -162,6 +183,83 @@ public sealed class TrillPipelineBuilder
         }
 
         foreach (var output in BuildWindowedOutputs(windowBuckets))
+        {
+            yield return output;
+        }
+    }
+
+    private async IAsyncEnumerable<JsonElement> ExecuteSlidingWindowAsync(
+        IAsyncEnumerable<InputEvent> input,
+        long windowSize,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var aggregates = _plan.SelectItems.Where(item => item.Kind == SelectItemKind.Aggregate).Select(item => item.Aggregate!).ToList();
+        var events = new List<(long Timestamp, string GroupKey, List<JsonElement> GroupValues, JsonElement Payload)>();
+
+        await foreach (var inputEvent in input.WithCancellation(cancellationToken))
+        {
+            if (_plan.Filter is not null && !MatchesFilter(inputEvent.Payload, _plan.Filter))
+            {
+                continue;
+            }
+
+            if (!TryGetGroupValues(inputEvent.Payload, out var groupKey, out var groupValues))
+            {
+                continue;
+            }
+
+            var timestamp = ResolveTimestamp(inputEvent.Payload, inputEvent.ArrivalTime);
+            events.Add((timestamp, groupKey, groupValues, inputEvent.Payload));
+        }
+
+        var windowBuckets = new List<(long WindowStart, long WindowEnd, string GroupKey, AggregateBucket Bucket)>();
+        foreach (var group in events.GroupBy(item => item.GroupKey))
+        {
+            var groupEvents = group.OrderBy(item => item.Timestamp).ToList();
+            var groupValues = groupEvents.FirstOrDefault().GroupValues ?? new List<JsonElement>();
+            var timestamps = groupEvents.Select(item => item.Timestamp).Distinct().ToList();
+
+            foreach (var windowEnd in timestamps)
+            {
+                var windowStart = windowEnd - windowSize;
+                var bucket = new AggregateBucket(groupValues, aggregates);
+                foreach (var item in groupEvents)
+                {
+                    if (item.Timestamp < windowStart || item.Timestamp > windowEnd)
+                    {
+                        continue;
+                    }
+
+                    bucket.Accumulate(item.Payload);
+                }
+
+                if (bucket.Aggregates.Count == 0 && _plan.GroupBy.Count == 0)
+                {
+                    continue;
+                }
+
+                windowBuckets.Add((windowStart, windowEnd, group.Key, bucket));
+            }
+        }
+
+        var outputs = BuildWindowedOutputs(windowBuckets);
+        foreach (var output in OrderOutputs(outputs))
+        {
+            yield return output;
+        }
+    }
+
+    private async IAsyncEnumerable<JsonElement> ExecuteOrderedProjectionAsync(
+        IAsyncEnumerable<InputEvent> input,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var outputs = new List<JsonElement>();
+        await foreach (var output in ExecuteStreamingAsync(input, cancellationToken))
+        {
+            outputs.Add(output);
+        }
+
+        foreach (var output in OrderOutputs(outputs))
         {
             yield return output;
         }
@@ -359,12 +457,28 @@ public sealed class TrillPipelineBuilder
     private IEnumerable<JsonElement> BuildWindowedOutputs(
         Dictionary<(long WindowStart, long WindowEnd, string GroupKey), AggregateBucket> buckets)
     {
-        foreach (var entry in buckets
+        var outputs = buckets
             .OrderBy(entry => entry.Key.WindowStart)
             .ThenBy(entry => entry.Key.GroupKey, StringComparer.Ordinal))
+            .Select(entry => BuildAggregatePayload(entry.Value, includeWindow: true, entry.Key.WindowStart, entry.Key.WindowEnd))
+            .ToList();
+
+        foreach (var output in OrderOutputs(outputs))
         {
-            yield return BuildAggregatePayload(entry.Value, includeWindow: true, entry.Key.WindowStart, entry.Key.WindowEnd);
+            yield return output;
         }
+    }
+
+    private IEnumerable<JsonElement> BuildWindowedOutputs(
+        List<(long WindowStart, long WindowEnd, string GroupKey, AggregateBucket Bucket)> buckets)
+    {
+        var outputs = buckets
+            .OrderBy(entry => entry.WindowStart)
+            .ThenBy(entry => entry.GroupKey, StringComparer.Ordinal)
+            .Select(entry => BuildAggregatePayload(entry.Bucket, includeWindow: true, entry.WindowStart, entry.WindowEnd))
+            .ToList();
+
+        return outputs;
     }
 
     private JsonElement BuildAggregatePayload(
@@ -596,5 +710,132 @@ public sealed class TrillPipelineBuilder
 
         value = numeric;
         return true;
+    }
+
+    private IEnumerable<JsonElement> OrderOutputs(IEnumerable<JsonElement> outputs)
+    {
+        if (_plan.OrderBy.Count == 0)
+        {
+            return outputs;
+        }
+
+        var ordered = outputs.ToList();
+        ordered.Sort(new JsonElementOrderComparer(_plan.OrderBy));
+        return ordered;
+    }
+
+    private sealed class JsonElementOrderComparer : IComparer<JsonElement>
+    {
+        private readonly IReadOnlyList<OrderByDefinition> _orderBy;
+
+        public JsonElementOrderComparer(IReadOnlyList<OrderByDefinition> orderBy)
+        {
+            _orderBy = orderBy;
+        }
+
+        public int Compare(JsonElement left, JsonElement right)
+        {
+            foreach (var orderBy in _orderBy)
+            {
+                var leftValue = TryGetOrderValue(left, orderBy.OutputName, out var leftElement)
+                    ? leftElement
+                    : default;
+                var rightValue = TryGetOrderValue(right, orderBy.OutputName, out var rightElement)
+                    ? rightElement
+                    : default;
+
+                var comparison = CompareJsonValues(leftValue, rightValue);
+                if (comparison == 0)
+                {
+                    continue;
+                }
+
+                return orderBy.Direction == SortDirection.Descending ? -comparison : comparison;
+            }
+
+            return 0;
+        }
+
+        private static int CompareJsonValues(JsonElement left, JsonElement right)
+        {
+            var leftNull = left.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined;
+            var rightNull = right.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined;
+
+            if (leftNull && rightNull)
+            {
+                return 0;
+            }
+
+            if (leftNull)
+            {
+                return -1;
+            }
+
+            if (rightNull)
+            {
+                return 1;
+            }
+
+            if (left.ValueKind == JsonValueKind.Number && right.ValueKind == JsonValueKind.Number)
+            {
+                left.TryGetDouble(out var leftNumber);
+                right.TryGetDouble(out var rightNumber);
+                return leftNumber.CompareTo(rightNumber);
+            }
+
+            if (left.ValueKind == JsonValueKind.String && right.ValueKind == JsonValueKind.String)
+            {
+                return string.CompareOrdinal(left.GetString(), right.GetString());
+            }
+
+            if (left.ValueKind is JsonValueKind.True or JsonValueKind.False &&
+                right.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            {
+                var leftBool = left.ValueKind == JsonValueKind.True;
+                var rightBool = right.ValueKind == JsonValueKind.True;
+                return leftBool.CompareTo(rightBool);
+            }
+
+            return GetSortRank(left.ValueKind).CompareTo(GetSortRank(right.ValueKind));
+        }
+
+        private static bool TryGetOrderValue(JsonElement element, string propertyName, out JsonElement value)
+        {
+            value = default;
+            if (element.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            if (element.TryGetProperty(propertyName, out value))
+            {
+                return true;
+            }
+
+            foreach (var property in element.EnumerateObject())
+            {
+                if (property.NameEquals(propertyName) ||
+                    property.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = property.Value;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static int GetSortRank(JsonValueKind kind) =>
+            kind switch
+            {
+                JsonValueKind.Null => 0,
+                JsonValueKind.False => 1,
+                JsonValueKind.True => 2,
+                JsonValueKind.Number => 3,
+                JsonValueKind.String => 4,
+                JsonValueKind.Object => 5,
+                JsonValueKind.Array => 6,
+                _ => 7
+            };
     }
 }

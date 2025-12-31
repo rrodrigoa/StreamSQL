@@ -17,7 +17,7 @@ public sealed class CommandLineOptions
 
         if (args.Length == 0)
         {
-            error = "Usage: streamsql [--query \"SQL\"] [--file path] [--follow] [--out path] [--timestamp-by field] [--window tumbling:<duration>|sliding:<size>,<slide>] [--tumbling-window duration] <query.sql>";
+            error = "Usage: streamsql [--query \"SQL\"] [--file path] [--follow] [--out path] [--timestamp-by field] [--window tumbling:<duration>|rolling:<size>,<slide>|sliding:<duration>] [--tumbling-window duration] <query.sql>";
             return false;
         }
 
@@ -174,7 +174,7 @@ public sealed class CommandLineOptions
         var parts = value.Split(':', 2, StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length != 2)
         {
-            error = "Invalid window definition. Use tumbling:<duration> or sliding:<size>,<slide>.";
+            error = "Invalid window definition. Use tumbling:<duration>, rolling:<size>,<slide>, or sliding:<duration>.";
             return false;
         }
 
@@ -190,22 +190,34 @@ public sealed class CommandLineOptions
             return true;
         }
 
-        if (parts[0].Equals("sliding", StringComparison.OrdinalIgnoreCase))
+        if (parts[0].Equals("rolling", StringComparison.OrdinalIgnoreCase))
         {
             var durations = parts[1].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             if (durations.Length != 2 ||
                 !TryParseDuration(durations[0], out var size) ||
                 !TryParseDuration(durations[1], out var slide))
             {
-                error = "Invalid sliding window definition. Use sliding:<size>,<slide>.";
+                error = "Invalid rolling window definition. Use rolling:<size>,<slide>.";
                 return false;
             }
 
-            windowDefinition = new WindowDefinition(WindowType.Sliding, size, slide);
+            windowDefinition = new WindowDefinition(WindowType.Rolling, size, slide);
             return true;
         }
 
-        error = "Unsupported window type. Use tumbling or sliding.";
+        if (parts[0].Equals("sliding", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!TryParseDuration(parts[1], out var size))
+            {
+                error = "Invalid sliding window definition. Use sliding:<duration>.";
+                return false;
+            }
+
+            windowDefinition = new WindowDefinition(WindowType.Sliding, size, null);
+            return true;
+        }
+
+        error = "Unsupported window type. Use tumbling, rolling, or sliding.";
         return false;
     }
 

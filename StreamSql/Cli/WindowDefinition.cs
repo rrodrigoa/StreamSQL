@@ -5,5 +5,6 @@ public sealed record WindowDefinition(WindowType Type, TimeSpan Size, TimeSpan? 
 public enum WindowType
 {
     Tumbling,
+    Rolling,
     Sliding
 }

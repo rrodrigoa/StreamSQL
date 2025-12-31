@@ -31,6 +31,7 @@ public class SqlSyntaxTests
         yield return new object[] { "Count star", "SELECT COUNT(*) FROM input" };
         yield return new object[] { "Avg", "SELECT AVG(data.value) FROM input" };
         yield return new object[] { "Group by", "SELECT data.category, COUNT(*) FROM input GROUP BY data.category" };
+        yield return new object[] { "Order by", "SELECT data.value FROM input ORDER BY data.value DESC" };
     }
 
     public static IEnumerable<object[]> ParserErrorCases()
