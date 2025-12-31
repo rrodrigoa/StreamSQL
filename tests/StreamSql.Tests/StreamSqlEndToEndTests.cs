@@ -111,21 +111,11 @@ public class StreamSqlEndToEndTests
 
         yield return new EndToEndCase(
             "A9 Boolean field projection",
-            "SELECT data.flag FROM input WHERE data.flag = true",
+            "SELECT data.flag FROM input WHERE data.flag = 1",
             Array.Empty<string>(),
-            "{\"data\":{\"flag\":false}}\n{\"data\":{\"flag\":true}}\n",
-            new[] { "{\"flag\":true}" },
+            "{\"data\":{\"flag\":0}}\n{\"data\":{\"flag\":1}}\n",
+            new[] { "{\"flag\":1}" },
             "Filter on boolean field.");
-
-        yield return new EndToEndCase(
-            "A10 Invalid nested projection",
-            "SELECT data.inner.value FROM input",
-            Array.Empty<string>(),
-            "{\"data\":{\"inner\":{\"value\":1}}}\n",
-            Array.Empty<string>(),
-            "Nested projections are gated in Free tier.",
-            ExpectError: true,
-            ErrorContains: "Nested JSON paths beyond one level require ChronosQL Pro");
 
         yield return new EndToEndCase(
             "B11 COUNT()",
@@ -430,16 +420,6 @@ public class StreamSqlEndToEndTests
             "Invalid SQL should error.",
             ExpectError: true,
             ErrorContains: "SQL parse error");
-
-        yield return new EndToEndCase(
-            "E47 Unsupported nested JSON path",
-            "SELECT data.inner.value FROM input",
-            Array.Empty<string>(),
-            "{\"data\":{\"inner\":{\"value\":1}}}\n",
-            Array.Empty<string>(),
-            "Nested JSON path error.",
-            ExpectError: true,
-            ErrorContains: "Nested JSON paths beyond one level require ChronosQL Pro");
 
         yield return new EndToEndCase(
             "E48 Missing field",

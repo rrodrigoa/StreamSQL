@@ -324,22 +324,50 @@ public static class SqlParser
 
         private static bool TryGetLiteral(ScalarExpression expression, out FilterValue value)
         {
-            value = new FilterValue(FilterValueKind.Number, 0, false);
+            value = default;
+
             switch (expression)
             {
-                case IntegerLiteral integerLiteral when double.TryParse(integerLiteral.Value, out var integer):
-                    value = new FilterValue(FilterValueKind.Number, integer, false);
-                    return true;
-                case NumericLiteral numericLiteral when double.TryParse(numericLiteral.Value, out var numeric):
-                    value = new FilterValue(FilterValueKind.Number, numeric, false);
-                    return true;
-                case BooleanLiteral booleanLiteral when bool.TryParse(booleanLiteral.Value, out var boolean):
-                    value = new FilterValue(FilterValueKind.Boolean, 0, boolean);
-                    return true;
+                case IntegerLiteral integerLiteral
+                    when double.TryParse(integerLiteral.Value, out var integer):
+                    {
+                        // Interpret 0 / 1 as boolean when needed
+                        if (integer == 0 || integer == 1)
+                        {
+                            value = new FilterValue(FilterValueKind.Boolean, 0, integer == 1, string.Empty);
+                        }
+                        else
+                        {
+                            value = new FilterValue(FilterValueKind.Number, integer, false, string.Empty);
+                        }
+
+                        return true;
+                    }
+
+                case NumericLiteral numericLiteral
+                    when double.TryParse(numericLiteral.Value, out var numeric):
+                    {
+                        value = new FilterValue(FilterValueKind.Number, numeric, false, string.Empty);
+                        return true;
+                    }
+
+                case StringLiteral stringLiteral:
+                    {
+                        value = new FilterValue(FilterValueKind.String, 0, false, stringLiteral.Value);
+                        return true;
+                    }
+
+                case NullLiteral:
+                    {
+                        value = new FilterValue(FilterValueKind.Null, 0, false, string.Empty);
+                        return true;
+                    }
+
                 default:
                     return false;
             }
         }
+
 
         private static bool TryBuildAggregate(
             FunctionCall functionCall,
@@ -367,7 +395,7 @@ public static class SqlParser
 
                 if (functionCall.Parameters.Count == 1)
                 {
-                    if (functionCall.Parameters[0] is StarExpression)
+                    if (functionCall.Parameters[0] is ColumnReferenceExpression col && col.ColumnType == ColumnType.Wildcard)
                     {
                         aggregate = new AggregateDefinition(aggregateType, null, alias ?? "count", CountAll: true);
                         return true;
@@ -476,5 +504,4 @@ public static class SqlParser
         private static bool FieldEquals(FieldReference left, FieldReference right) =>
             left.PathSegments.SequenceEqual(right.PathSegments, StringComparer.OrdinalIgnoreCase);
     }
-}
 }
