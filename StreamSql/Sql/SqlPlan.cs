@@ -6,7 +6,8 @@ public sealed record SqlPlan(
     string? OutputStream,
     IReadOnlyList<SelectItem> SelectItems,
     IReadOnlyList<FieldReference> GroupBy,
-    FilterDefinition? Filter);
+    FilterDefinition? Filter,
+    IReadOnlyList<OrderByDefinition> OrderBy);
 
 public sealed record SelectItem(SelectItemKind Kind, FieldReference? Field, AggregateDefinition? Aggregate, string OutputName);
 
@@ -48,4 +49,12 @@ public enum FilterValueKind
     Boolean,
     String,
     Null
+}
+
+public sealed record OrderByDefinition(string OutputName, SortDirection Direction);
+
+public enum SortDirection
+{
+    Ascending,
+    Descending
 }

@@ -32,7 +32,8 @@ public static class SqlParser
             visitor.OutputStream,
             visitor.SelectItems,
             visitor.GroupBy,
-            visitor.Filter);
+            visitor.Filter,
+            visitor.OrderBy);
     }
 
     private sealed class SqlValidationVisitor : TSqlFragmentVisitor
@@ -44,7 +45,9 @@ public static class SqlParser
         public List<SelectItem> SelectItems { get; } = new();
         public List<FieldReference> GroupBy { get; } = new();
         public FilterDefinition? Filter { get; private set; }
+        public List<OrderByDefinition> OrderBy { get; } = new();
         public bool HasAggregate => SelectItems.Any(item => item.Kind == SelectItemKind.Aggregate);
+        private readonly List<OrderByElement> _pendingOrderBy = new();
 
         public override void ExplicitVisit(QuerySpecification node)
         {
@@ -144,6 +147,7 @@ public static class SqlParser
                 }
             }
 
+            BuildOrderBy();
             ValidateAggregates();
         }
 
@@ -176,6 +180,19 @@ public static class SqlParser
             {
                 OutputStream = GetSchemaObjectName(node.Into);
             }
+        }
+
+        public override void ExplicitVisit(OrderByClause node)
+        {
+            base.ExplicitVisit(node);
+
+            if (node.OrderByElements is null || node.OrderByElements.Count == 0)
+            {
+                Unsupported.Add("ORDER BY");
+                return;
+            }
+
+            _pendingOrderBy.AddRange(node.OrderByElements);
         }
 
         private static string? GetSchemaObjectName(SchemaObjectName? schemaObjectName)
@@ -225,6 +242,123 @@ public static class SqlParser
             }
 
             fieldReference = new FieldReference(identifiers);
+            return true;
+        }
+
+        private bool TryBuildOrderBy(OrderByElement element, out OrderByDefinition orderBy, out string? error)
+        {
+            orderBy = default!;
+            error = null;
+
+            var direction = element.SortOrder == SortOrder.Descending
+                ? SortDirection.Descending
+                : SortDirection.Ascending;
+
+            if (element.Expression is ColumnReferenceExpression column)
+            {
+                if (TryResolveOrderByColumn(column, out var outputName, out error))
+                {
+                    orderBy = new OrderByDefinition(outputName, direction);
+                    return true;
+                }
+
+                return false;
+            }
+
+            if (element.Expression is FunctionCall functionCall)
+            {
+                if (!TryBuildAggregate(functionCall, null, InputStream, out var aggregate, out error))
+                {
+                    return false;
+                }
+
+                var match = SelectItems.FirstOrDefault(item =>
+                    item.Kind == SelectItemKind.Aggregate &&
+                    AggregateEquals(item.Aggregate!, aggregate!));
+
+                if (match is null)
+                {
+                    error = "ORDER BY aggregate must appear in SELECT";
+                    return false;
+                }
+
+                orderBy = new OrderByDefinition(match.OutputName, direction);
+                return true;
+            }
+
+            error = "ORDER BY expression";
+            return false;
+        }
+
+        private void BuildOrderBy()
+        {
+            if (_pendingOrderBy.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var element in _pendingOrderBy)
+            {
+                if (!TryBuildOrderBy(element, out var orderBy, out var error))
+                {
+                    Unsupported.Add(error ?? "ORDER BY");
+                    continue;
+                }
+
+                OrderBy.Add(orderBy);
+            }
+
+            _pendingOrderBy.Clear();
+        }
+
+        private bool TryResolveOrderByColumn(
+            ColumnReferenceExpression column,
+            out string outputName,
+            out string? error)
+        {
+            outputName = string.Empty;
+            error = null;
+
+            if (column.MultiPartIdentifier?.Identifiers is null || column.MultiPartIdentifier.Identifiers.Count == 0)
+            {
+                error = "ORDER BY column";
+                return false;
+            }
+
+            var identifiers = column.MultiPartIdentifier.Identifiers.Select(id => id.Value).ToList();
+            if (identifiers.Count == 1)
+            {
+                var identifier = identifiers[0];
+                if (identifier.Equals("windowStart", StringComparison.OrdinalIgnoreCase) ||
+                    identifier.Equals("windowEnd", StringComparison.OrdinalIgnoreCase))
+                {
+                    outputName = identifier;
+                    return true;
+                }
+
+                var match = SelectItems.FirstOrDefault(item =>
+                    item.OutputName.Equals(identifier, StringComparison.OrdinalIgnoreCase));
+                if (match is not null)
+                {
+                    outputName = match.OutputName;
+                    return true;
+                }
+            }
+
+            if (!TryBuildFieldReference(column, InputStream, out var fieldReference, out error))
+            {
+                return false;
+            }
+
+            var fieldMatch = SelectItems.FirstOrDefault(item =>
+                item.Kind == SelectItemKind.Field && FieldEquals(item.Field!, fieldReference));
+            if (fieldMatch is null)
+            {
+                error = "ORDER BY column must appear in SELECT";
+                return false;
+            }
+
+            outputName = fieldMatch.OutputName;
             return true;
         }
 
@@ -503,5 +637,11 @@ public static class SqlParser
 
         private static bool FieldEquals(FieldReference left, FieldReference right) =>
             left.PathSegments.SequenceEqual(right.PathSegments, StringComparer.OrdinalIgnoreCase);
+
+        private static bool AggregateEquals(AggregateDefinition left, AggregateDefinition right) =>
+            left.Type == right.Type &&
+            left.CountAll == right.CountAll &&
+            ((left.Field is null && right.Field is null) ||
+             (left.Field is not null && right.Field is not null && FieldEquals(left.Field, right.Field)));
     }
 }

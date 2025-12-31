@@ -254,12 +254,12 @@ public class StreamSqlEndToEndTests
             "Tumbling window average.");
 
         yield return new EndToEndCase(
-            "C28 Sliding window",
+            "C28 Rolling window",
             "SELECT COUNT(*) FROM input",
-            new[] { "--window", "sliding:10s,5s", "--timestamp-by", "ts" },
+            new[] { "--window", "rolling:10s,5s", "--timestamp-by", "ts" },
             "{\"ts\":1000}\n{\"ts\":6000}\n{\"ts\":12000}\n",
             new[] { "{\"windowStart\":0,\"windowEnd\":10000,\"count\":2}", "{\"windowStart\":5000,\"windowEnd\":15000,\"count\":2}", "{\"windowStart\":10000,\"windowEnd\":20000,\"count\":1}" },
-            "Sliding window count.");
+            "Rolling window count.");
 
         yield return new EndToEndCase(
             "C29 Window with WHERE",
