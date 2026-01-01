@@ -1,5 +1,5 @@
 using System.Text.Json;
 
-namespace StreamSql.Input;
+namespace ChronosQL.Engine;
 
 public readonly record struct InputEvent(JsonElement Payload, long ArrivalTime);

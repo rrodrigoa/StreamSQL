@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ChronosQL.Engine;
 
 namespace StreamSql.Input;
 

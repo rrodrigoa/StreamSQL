@@ -1,3 +1,4 @@
+using ChronosQL.Engine;
 using StreamSql.Cli;
 using Xunit;
 

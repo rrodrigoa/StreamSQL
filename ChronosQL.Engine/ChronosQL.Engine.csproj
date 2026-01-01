@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup Condition="Exists('..\\Trill\\src\\Microsoft.StreamProcessing\\Microsoft.StreamProcessing.csproj')">
+    <ProjectReference Include="..\\Trill\\src\\Microsoft.StreamProcessing\\Microsoft.StreamProcessing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.SqlServer.TransactSql.ScriptDom" Version="170.147.0" />
+    <PackageReference Include="System.Reactive.Linq" Version="6.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Trill\Sources\Core\Microsoft.StreamProcessing\Microsoft.StreamProcessing.csproj" />
+  </ItemGroup>
+</Project>

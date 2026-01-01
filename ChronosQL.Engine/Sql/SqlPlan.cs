@@ -1,4 +1,4 @@
-namespace StreamSql.Sql;
+namespace ChronosQL.Engine.Sql;
 
 public sealed record SqlPlan(
     string RawSql,

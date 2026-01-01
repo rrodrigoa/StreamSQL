@@ -1,7 +1,7 @@
 using Microsoft.SqlServer.TransactSql.ScriptDom;
 using System.Text.RegularExpressions;
 
-namespace StreamSql.Sql;
+namespace ChronosQL.Engine.Sql;
 
 public static class SqlParser
 {
