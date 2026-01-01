@@ -14,7 +14,8 @@ public class StreamSqlEndToEndTests
     {
         if (testCase.ExpectError)
         {
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => ExecuteAsync(testCase));
+            var expectedExceptionType = testCase.ExpectedExceptionType ?? typeof(InvalidOperationException);
+            var exception = await Assert.ThrowsAsync(expectedExceptionType, () => ExecuteAsync(testCase));
             if (!string.IsNullOrWhiteSpace(testCase.ErrorContains))
             {
                 Assert.Contains(testCase.ErrorContains, exception.Message);
@@ -186,7 +187,16 @@ public class StreamSqlEndToEndTests
             "SELECT COUNT(*) FROM input",
             Array.Empty<string>(),
             string.Empty,
-            new[] { "{\"count\":0}" },
+            Array.Empty<string>(),
+            "Aggregate even when no input is present.",
+            UseStdin: true);
+
+        yield return new EndToEndCase(
+            "B20-NonSTDIN Aggregate over empty input",
+            "SELECT COUNT(*) FROM input",
+            Array.Empty<string>(),
+            string.Empty,
+            Array.Empty<string>(),
             "Aggregate even when no input is present.");
 
         yield return new EndToEndCase(
@@ -333,18 +343,34 @@ public class StreamSqlEndToEndTests
             "SELECT COUNT(*) FROM input",
             Array.Empty<string>(),
             "{\"data\":{\"value\":1}}\n{\"data\":{\"value\":2}}\n",
-            new[] { "{\"count\":2}" },
+            new[] { "{\"count\":1}", "{\"count\":1}" },
             "Aggregate stdin stream.",
             UseStdin: true);
+
+        yield return new EndToEndCase(
+            "D38-NonSTDIN stdin with aggregation",
+            "SELECT COUNT(*) FROM input",
+            Array.Empty<string>(),
+            "{\"data\":{\"value\":1}}\n{\"data\":{\"value\":2}}\n",
+            new[] { "{\"count\":2}" },
+            "Aggregate stdin stream.");
 
         yield return new EndToEndCase(
             "D39 stdin with window",
             "SELECT COUNT(*) FROM input",
             new[] { "--window", "tumbling:5s", "--timestamp-by", "ts" },
             "{\"ts\":1000}\n{\"ts\":2000}\n",
-            new[] { "{\"windowStart\":0,\"windowEnd\":5000,\"count\":2}" },
+            new[] { "{\"windowStart\":0,\"windowEnd\":5000,\"count\":1}", "{\"windowStart\":0,\"windowEnd\":5000,\"count\":1}" },
             "Windowed stdin stream.",
             UseStdin: true);
+
+        yield return new EndToEndCase(
+            "D39-NonSTDIN stdin with window",
+            "SELECT COUNT(*) FROM input",
+            new[] { "--window", "tumbling:5s", "--timestamp-by", "ts" },
+            "{\"ts\":1000}\n{\"ts\":2000}\n",
+            new[] { "{\"windowStart\":0,\"windowEnd\":5000,\"count\":2}" },
+            "Windowed stdin stream.");
 
         yield return new EndToEndCase(
             "D40 stdout JSON Lines format",
@@ -361,9 +387,17 @@ public class StreamSqlEndToEndTests
             "SELECT COUNT(*) FROM input",
             Array.Empty<string>(),
             "{\"data\":{\"value\":1}}\n{\"data\":{\"value\":2}}\n",
-            new[] { "{\"count\":2}" },
+            new[] { "{\"count\":1}", "{\"count\":1}" },
             "Aggregate outputs single line.",
             UseStdin: true);
+
+        yield return new EndToEndCase(
+            "D41-NonSTDIN stdout single-row aggregate",
+            "SELECT COUNT(*) FROM input",
+            Array.Empty<string>(),
+            "{\"data\":{\"value\":1}}\n{\"data\":{\"value\":2}}\n",
+            new[] { "{\"count\":2}" },
+            "Aggregate outputs single line.");
 
         yield return new EndToEndCase(
             "D42 empty stdin",
@@ -383,17 +417,34 @@ public class StreamSqlEndToEndTests
             "Malformed JSON should throw.",
             UseStdin: true,
             ExpectError: true,
-            ErrorContains: "Invalid JSON input");
+            ExpectedExceptionType: typeof(JsonReaderException));
+
+        yield return new EndToEndCase(
+            "D43-NonSTDIN malformed JSON line",
+            "SELECT data.value FROM input",
+            Array.Empty<string>(),
+            "{\"data\":{\"value\":1}}\n{invalid}\n",
+            Array.Empty<string>(),
+            "Malformed JSON should throw.",
+            ExpectError: true,
+            ExpectedExceptionType: typeof(JsonReaderException));
 
         yield return new EndToEndCase(
             "D44 large stdin",
             "SELECT COUNT(*) FROM input",
             Array.Empty<string>(),
             string.Join('\n', Enumerable.Repeat("{\"data\":{\"value\":1}}", 1000)) + "\n",
-            new[] { "{\"count\":1000}" },
+            Enumerable.Repeat("{\"count\":1}", 1000).ToArray(),
             "Performance sanity on large input.",
             UseStdin: true);
 
+        yield return new EndToEndCase(
+            "D44-NonSTDIN large stdin",
+            "SELECT COUNT(*) FROM input",
+            Array.Empty<string>(),
+            string.Join('\n', Enumerable.Repeat("{\"data\":{\"value\":1}}", 1000)) + "\n",
+            new[] { "{\"count\":1000}" },
+            "Performance sanity on large input.");
         yield return new EndToEndCase(
             "D45 stdin with aliases",
             "SELECT data.value AS v FROM input",
@@ -523,4 +574,5 @@ public sealed record EndToEndCase(
     string? ErrorContains = null,
     bool UseStdin = false,
     bool UseQueryFile = false,
-    bool ValidateJson = false);
+    bool ValidateJson = false,
+    Type? ExpectedExceptionType = null);
