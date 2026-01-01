@@ -32,7 +32,9 @@ public static class SqlParser
             visitor.OutputStream,
             visitor.SelectItems,
             visitor.GroupBy,
+            visitor.Aggregates,
             visitor.Filter,
+            visitor.Having,
             visitor.OrderBy);
     }
 
@@ -44,9 +46,11 @@ public static class SqlParser
         public string? OutputStream { get; private set; }
         public List<SelectItem> SelectItems { get; } = new();
         public List<FieldReference> GroupBy { get; } = new();
+        public List<AggregateDefinition> Aggregates { get; } = new();
         public FilterDefinition? Filter { get; private set; }
+        public HavingDefinition? Having { get; private set; }
         public List<OrderByDefinition> OrderBy { get; } = new();
-        public bool HasAggregate => SelectItems.Any(item => item.Kind == SelectItemKind.Aggregate);
+        public bool HasAggregate => Aggregates.Count > 0;
         private readonly List<ExpressionWithSortOrder> _pendingOrderBy = new();
 
         public override void ExplicitVisit(QuerySpecification node)
@@ -101,6 +105,7 @@ public static class SqlParser
                     }
 
                     SelectItems.Add(new SelectItem(SelectItemKind.Aggregate, null, aggregate, aggregate.OutputName));
+                    AddAggregate(aggregate);
                     continue;
                 }
 
@@ -144,6 +149,15 @@ public static class SqlParser
 
                         GroupBy.Add(fieldReference);
                     }
+                }
+            }
+
+            if (node.HavingClause is not null)
+            {
+                Having = BuildHaving(node.HavingClause.SearchCondition, out var havingError);
+                if (Having is null)
+                {
+                    Unsupported.Add(havingError ?? "HAVING clause");
                 }
             }
 
@@ -390,6 +404,23 @@ public static class SqlParser
             return new FilterDefinition(conditions);
         }
 
+        private HavingDefinition? BuildHaving(BooleanExpression? searchCondition, out string? error)
+        {
+            error = null;
+            if (searchCondition is null)
+            {
+                return null;
+            }
+
+            var conditions = new List<HavingCondition>();
+            if (!TryCollectHavingConditions(searchCondition, conditions, out error))
+            {
+                return null;
+            }
+
+            return new HavingDefinition(conditions);
+        }
+
         private static bool TryCollectConditions(
             BooleanExpression expression,
             string? inputStream,
@@ -434,6 +465,87 @@ public static class SqlParser
             }
 
             error = "WHERE clause";
+            return false;
+        }
+
+        private bool TryCollectHavingConditions(
+            BooleanExpression expression,
+            List<HavingCondition> conditions,
+            out string? error)
+        {
+            error = null;
+            if (expression is BooleanBinaryExpression binary)
+            {
+                if (binary.BinaryExpressionType != BooleanBinaryExpressionType.And)
+                {
+                    error = "HAVING clause";
+                    return false;
+                }
+
+                return TryCollectHavingConditions(binary.FirstExpression, conditions, out error)
+                    && TryCollectHavingConditions(binary.SecondExpression, conditions, out error);
+            }
+
+            if (expression is not BooleanComparisonExpression comparison)
+            {
+                error = "HAVING clause";
+                return false;
+            }
+
+            if (!TryGetOperator(comparison.ComparisonType, out var filterOperator))
+            {
+                error = "HAVING clause";
+                return false;
+            }
+
+            if (!TryGetLiteral(comparison.SecondExpression, out var literal))
+            {
+                error = "HAVING clause";
+                return false;
+            }
+
+            if (comparison.FirstExpression is ColumnReferenceExpression column)
+            {
+                if (GroupBy.Count == 0)
+                {
+                    error = "HAVING column requires GROUP BY";
+                    return false;
+                }
+
+                if (!TryBuildFieldReference(column, InputStream, out var fieldReference, out error))
+                {
+                    return false;
+                }
+
+                if (!GroupBy.Any(group => FieldEquals(group, fieldReference)))
+                {
+                    error = "HAVING column must appear in GROUP BY";
+                    return false;
+                }
+
+                conditions.Add(new HavingCondition(
+                    new HavingOperand(HavingOperandKind.GroupField, fieldReference, null),
+                    filterOperator,
+                    literal));
+                return true;
+            }
+
+            if (comparison.FirstExpression is FunctionCall functionCall)
+            {
+                if (!TryBuildAggregate(functionCall, null, InputStream, out var aggregate, out error))
+                {
+                    return false;
+                }
+
+                AddAggregate(aggregate!);
+                conditions.Add(new HavingCondition(
+                    new HavingOperand(HavingOperandKind.Aggregate, null, aggregate),
+                    filterOperator,
+                    literal));
+                return true;
+            }
+
+            error = "HAVING clause";
             return false;
         }
 
@@ -596,6 +708,11 @@ public static class SqlParser
         {
             if (!HasAggregate)
             {
+                if (Having is not null)
+                {
+                    Unsupported.Add("HAVING without aggregate");
+                }
+
                 if (GroupBy.Count > 0)
                 {
                     Unsupported.Add("GROUP BY without aggregate");
@@ -624,6 +741,14 @@ public static class SqlParser
                 {
                     Unsupported.Add("GROUP BY mismatch: all non-aggregated fields must appear in GROUP BY.");
                 }
+            }
+        }
+
+        private void AddAggregate(AggregateDefinition aggregate)
+        {
+            if (!Aggregates.Any(existing => AggregateEquals(existing, aggregate)))
+            {
+                Aggregates.Add(aggregate);
             }
         }
 

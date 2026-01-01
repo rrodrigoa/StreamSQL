@@ -33,7 +33,7 @@ public sealed class TrillPipelineBuilder
             yield break;
         }
 
-        if (_plan.SelectItems.Any(item => item.Kind == SelectItemKind.Aggregate))
+        if (_plan.Aggregates.Count > 0)
         {
             await foreach (var output in ExecuteBatchAggregateAsync(input, cancellationToken))
             {
@@ -88,7 +88,7 @@ public sealed class TrillPipelineBuilder
         IAsyncEnumerable<InputEvent> input,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var aggregates = _plan.SelectItems.Where(item => item.Kind == SelectItemKind.Aggregate).Select(item => item.Aggregate!).ToList();
+        var aggregates = _plan.Aggregates.ToList();
         var groups = new Dictionary<string, AggregateBucket>(StringComparer.Ordinal);
 
         await foreach (var inputEvent in input.WithCancellation(cancellationToken))
@@ -128,7 +128,7 @@ public sealed class TrillPipelineBuilder
         IAsyncEnumerable<InputEvent> input,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var aggregates = _plan.SelectItems.Where(item => item.Kind == SelectItemKind.Aggregate).Select(item => item.Aggregate!).ToList();
+        var aggregates = _plan.Aggregates.ToList();
         if (aggregates.Count == 0)
         {
             await foreach (var output in ExecuteStreamingAsync(input, cancellationToken))
@@ -191,7 +191,7 @@ public sealed class TrillPipelineBuilder
         long windowSize,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var aggregates = _plan.SelectItems.Where(item => item.Kind == SelectItemKind.Aggregate).Select(item => item.Aggregate!).ToList();
+        var aggregates = _plan.Aggregates.ToList();
         var events = new List<(long Timestamp, string GroupKey, List<JsonElement> GroupValues, JsonElement Payload)>();
 
         await foreach (var inputEvent in input.WithCancellation(cancellationToken))
@@ -435,6 +435,11 @@ public sealed class TrillPipelineBuilder
     {
         foreach (var bucket in buckets.OrderBy(entry => entry.Key, StringComparer.Ordinal))
         {
+            if (!MatchesHaving(bucket.Value))
+            {
+                continue;
+            }
+
             yield return BuildAggregatePayload(bucket.Value, includeWindow, windowStart, windowEnd);
         }
     }
@@ -445,6 +450,7 @@ public sealed class TrillPipelineBuilder
         var outputs = buckets
             .OrderBy(entry => entry.Key.WindowStart)
             .ThenBy(entry => entry.Key.GroupKey, StringComparer.Ordinal)
+            .Where(entry => MatchesHaving(entry.Value))
             .Select(entry => BuildAggregatePayload(entry.Value, includeWindow: true, entry.Key.WindowStart, entry.Key.WindowEnd))
             .ToList();
 
@@ -460,6 +466,7 @@ public sealed class TrillPipelineBuilder
         var outputs = buckets
             .OrderBy(entry => entry.WindowStart)
             .ThenBy(entry => entry.GroupKey, StringComparer.Ordinal)
+            .Where(entry => MatchesHaving(entry.Bucket))
             .Select(entry => BuildAggregatePayload(entry.Bucket, includeWindow: true, entry.WindowStart, entry.WindowEnd))
             .ToList();
 
@@ -677,6 +684,37 @@ public sealed class TrillPipelineBuilder
                     return;
             }
         }
+
+        public FilterValue GetFilterValue()
+        {
+            switch (_definition.Type)
+            {
+                case AggregateType.Count:
+                    return new FilterValue(FilterValueKind.Number, _count, string.Empty);
+                case AggregateType.Sum:
+                    return new FilterValue(FilterValueKind.Number, _sum, string.Empty);
+                case AggregateType.Avg:
+                    if (_count == 0)
+                    {
+                        return new FilterValue(FilterValueKind.Null, 0, string.Empty);
+                    }
+                    return new FilterValue(FilterValueKind.Number, _sum / _count, string.Empty);
+                case AggregateType.Min:
+                    if (!_hasValue)
+                    {
+                        return new FilterValue(FilterValueKind.Null, 0, string.Empty);
+                    }
+                    return new FilterValue(FilterValueKind.Number, _min, string.Empty);
+                case AggregateType.Max:
+                    if (!_hasValue)
+                    {
+                        return new FilterValue(FilterValueKind.Null, 0, string.Empty);
+                    }
+                    return new FilterValue(FilterValueKind.Number, _max, string.Empty);
+            }
+
+            return new FilterValue(FilterValueKind.Null, 0, string.Empty);
+        }
     }
 
     private static bool TryGetNumericValue(JsonElement payload, IReadOnlyList<string> pathSegments, out double value)
@@ -805,10 +843,123 @@ public sealed class TrillPipelineBuilder
                     value = property.Value;
                     return true;
                 }
+        }
+
+        return false;
+    }
+
+    private bool MatchesHaving(AggregateBucket bucket)
+    {
+        if (_plan.Having is null)
+        {
+            return true;
+        }
+
+        foreach (var condition in _plan.Having.Conditions)
+        {
+            if (!TryGetHavingValue(bucket, condition.Operand, out var actual))
+            {
+                return false;
             }
 
-            return false;
+            if (!MatchesHavingCondition(actual, condition.Operator, condition.Value))
+            {
+                return false;
+            }
         }
+
+        return true;
+    }
+
+    private bool TryGetHavingValue(AggregateBucket bucket, HavingOperand operand, out FilterValue value)
+    {
+        value = new FilterValue(FilterValueKind.Null, 0, string.Empty);
+        switch (operand.Kind)
+        {
+            case HavingOperandKind.GroupField:
+                if (operand.Field is null)
+                {
+                    return false;
+                }
+
+                var index = GetGroupByIndex(operand.Field);
+                if (index < 0 || index >= bucket.GroupValues.Count)
+                {
+                    return false;
+                }
+
+                return TryConvertJsonValue(bucket.GroupValues[index], out value);
+            case HavingOperandKind.Aggregate:
+                if (operand.Aggregate is null)
+                {
+                    return false;
+                }
+
+                var aggregateIndex = bucket.AggregateOrder.IndexOf(operand.Aggregate);
+                if (aggregateIndex < 0 || aggregateIndex >= bucket.Aggregates.Count)
+                {
+                    return false;
+                }
+
+                value = bucket.Aggregates[aggregateIndex].GetFilterValue();
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static bool TryConvertJsonValue(JsonElement element, out FilterValue value)
+    {
+        value = new FilterValue(FilterValueKind.Null, 0, string.Empty);
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Number when element.TryGetDouble(out var numeric):
+                value = new FilterValue(FilterValueKind.Number, numeric, string.Empty);
+                return true;
+            case JsonValueKind.String:
+                value = new FilterValue(FilterValueKind.String, 0, element.GetString() ?? string.Empty);
+                return true;
+            case JsonValueKind.Null:
+                value = new FilterValue(FilterValueKind.Null, 0, string.Empty);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static bool MatchesHavingCondition(FilterValue actual, FilterOperator filterOperator, FilterValue expected)
+    {
+        switch (filterOperator)
+        {
+            case FilterOperator.GreaterThan:
+                return actual.Kind == FilterValueKind.Number
+                    && expected.Kind == FilterValueKind.Number
+                    && actual.Number > expected.Number;
+            case FilterOperator.LessThan:
+                return actual.Kind == FilterValueKind.Number
+                    && expected.Kind == FilterValueKind.Number
+                    && actual.Number < expected.Number;
+            case FilterOperator.Equals:
+                if (actual.Kind == FilterValueKind.Null || expected.Kind == FilterValueKind.Null)
+                {
+                    return actual.Kind == FilterValueKind.Null && expected.Kind == FilterValueKind.Null;
+                }
+
+                if (actual.Kind == FilterValueKind.Number && expected.Kind == FilterValueKind.Number)
+                {
+                    return actual.Number.Equals(expected.Number);
+                }
+
+                if (actual.Kind == FilterValueKind.String && expected.Kind == FilterValueKind.String)
+                {
+                    return string.Equals(actual.String, expected.String, StringComparison.Ordinal);
+                }
+
+                return false;
+            default:
+                return false;
+        }
+    }
 
         private static int GetSortRank(JsonValueKind kind) =>
             kind switch
