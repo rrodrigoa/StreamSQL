@@ -435,7 +435,7 @@ public sealed class TrillPipelineBuilder
     {
         foreach (var bucket in buckets.OrderBy(entry => entry.Key, StringComparer.Ordinal))
         {
-            if (!MatchesHaving(bucket.Value))
+            if (!MatchesHaving(_plan, bucket.Value))
             {
                 continue;
             }
@@ -450,7 +450,7 @@ public sealed class TrillPipelineBuilder
         var outputs = buckets
             .OrderBy(entry => entry.Key.WindowStart)
             .ThenBy(entry => entry.Key.GroupKey, StringComparer.Ordinal)
-            .Where(entry => MatchesHaving(entry.Value))
+            .Where(entry => MatchesHaving(_plan, entry.Value))
             .Select(entry => BuildAggregatePayload(entry.Value, includeWindow: true, entry.Key.WindowStart, entry.Key.WindowEnd))
             .ToList();
 
@@ -466,7 +466,7 @@ public sealed class TrillPipelineBuilder
         var outputs = buckets
             .OrderBy(entry => entry.WindowStart)
             .ThenBy(entry => entry.GroupKey, StringComparer.Ordinal)
-            .Where(entry => MatchesHaving(entry.Bucket))
+            .Where(entry => MatchesHaving(_plan, entry.Bucket))
             .Select(entry => BuildAggregatePayload(entry.Bucket, includeWindow: true, entry.WindowStart, entry.WindowEnd))
             .ToList();
 
@@ -848,7 +848,7 @@ public sealed class TrillPipelineBuilder
         return false;
     }
 
-    private bool MatchesHaving(AggregateBucket bucket)
+    private bool MatchesHaving(SqlPlan _plan, AggregateBucket bucket)
     {
         if (_plan.Having is null)
         {
