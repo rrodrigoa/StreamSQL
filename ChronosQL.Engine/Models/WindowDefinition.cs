@@ -1,4 +1,4 @@
-namespace StreamSql.Cli;
+namespace ChronosQL.Engine;
 
 public sealed record WindowDefinition(WindowType Type, TimeSpan Size, TimeSpan? Slide);
 

@@ -1,8 +1,7 @@
+using ChronosQL.Engine;
 using StreamSql.Cli;
-using StreamSql.Engine;
 using StreamSql.Input;
 using StreamSql.Output;
-using StreamSql.Sql;
 
 namespace StreamSql;
 
@@ -23,21 +22,19 @@ public static class Program
         }
 
         var sqlText = options.QueryText ?? await File.ReadAllTextAsync(options.QueryFilePath!);
-        var plan = SqlParser.Parse(sqlText);
-
         await using var inputStream = StreamReaderFactory.OpenInput(options);
         var jsonReader = new JsonLineReader(inputStream, options.Follow);
 
         await using var outputStream = StreamReaderFactory.OpenOutput(options);
         var jsonWriter = new JsonLineWriter(outputStream);
 
-        var timestampField = options.EventTimeField ?? "timestamp";
-        var pipeline = new TrillPipelineBuilder(
-            timestampField,
-            options.Follow,
-            plan,
-            options.Window);
-        var results = pipeline.ExecuteAsync(jsonReader.ReadAllAsync());
+        var engine = new ChronosQLEngine(new EngineExecutionOptions
+        {
+            TimestampField = options.EventTimeField ?? "timestamp",
+            Follow = options.Follow,
+            Window = options.Window
+        });
+        var results = engine.ExecuteAsync(sqlText, jsonReader.ReadAllAsync());
 
         await jsonWriter.WriteAllAsync(results);
         return 0;

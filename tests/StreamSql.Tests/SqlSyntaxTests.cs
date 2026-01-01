@@ -1,4 +1,4 @@
-using StreamSql.Sql;
+using ChronosQL.Engine.Sql;
 using Xunit;
 
 namespace StreamSql.Tests;

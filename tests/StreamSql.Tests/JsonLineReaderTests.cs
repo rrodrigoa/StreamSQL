@@ -1,4 +1,5 @@
 using System.Text;
+using ChronosQL.Engine;
 using StreamSql.Input;
 using Xunit;
 

@@ -1,7 +1,7 @@
 using Microsoft.StreamProcessing;
 using System.Text.Json;
 
-namespace StreamSql.Sql;
+namespace ChronosQL.Engine.Sql;
 
 public static class SqlToTrillTranslator
 {

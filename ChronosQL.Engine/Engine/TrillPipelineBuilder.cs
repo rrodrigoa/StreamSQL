@@ -1,11 +1,9 @@
 using Microsoft.StreamProcessing;
-using StreamSql.Input;
-using StreamSql.Sql;
-using System.Text.Json;
 using System.Reactive.Linq;
-using StreamSql.Cli;
+using System.Text.Json;
+using ChronosQL.Engine.Sql;
 
-namespace StreamSql.Engine;
+namespace ChronosQL.Engine;
 
 public sealed class TrillPipelineBuilder
 {

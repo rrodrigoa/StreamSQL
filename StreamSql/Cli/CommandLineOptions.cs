@@ -1,3 +1,5 @@
+using ChronosQL.Engine;
+
 namespace StreamSql.Cli;
 
 public sealed class CommandLineOptions

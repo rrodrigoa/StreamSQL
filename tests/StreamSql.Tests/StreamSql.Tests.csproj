@@ -15,5 +15,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\StreamSql\StreamSql.csproj" />
+    <ProjectReference Include="..\..\ChronosQL.Engine\ChronosQL.Engine.csproj" />
   </ItemGroup>
 </Project>
