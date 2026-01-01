@@ -23,6 +23,7 @@ public sealed class JsonLineWriter
         {
             var json = JsonSerializer.Serialize(element);
             await writer.WriteLineAsync(json.AsMemory(), cancellationToken);
+            await writer.FlushAsync(cancellationToken);
         }
 
         await writer.FlushAsync(cancellationToken);
