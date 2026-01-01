@@ -459,7 +459,7 @@ public sealed class TrillPipelineBuilder
     {
         var outputs = buckets
             .OrderBy(entry => entry.Key.WindowStart)
-            .ThenBy(entry => entry.Key.GroupKey, StringComparer.Ordinal))
+            .ThenBy(entry => entry.Key.GroupKey, StringComparer.Ordinal)
             .Select(entry => BuildAggregatePayload(entry.Value, includeWindow: true, entry.Key.WindowStart, entry.Key.WindowEnd))
             .ToList();
 

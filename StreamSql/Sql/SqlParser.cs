@@ -47,7 +47,7 @@ public static class SqlParser
         public FilterDefinition? Filter { get; private set; }
         public List<OrderByDefinition> OrderBy { get; } = new();
         public bool HasAggregate => SelectItems.Any(item => item.Kind == SelectItemKind.Aggregate);
-        private readonly List<OrderByElement> _pendingOrderBy = new();
+        private readonly List<ExpressionWithSortOrder> _pendingOrderBy = new();
 
         public override void ExplicitVisit(QuerySpecification node)
         {
@@ -245,7 +245,7 @@ public static class SqlParser
             return true;
         }
 
-        private bool TryBuildOrderBy(OrderByElement element, out OrderByDefinition orderBy, out string? error)
+        private bool TryBuildOrderBy(ExpressionWithSortOrder element, out OrderByDefinition orderBy, out string? error)
         {
             orderBy = default!;
             error = null;
