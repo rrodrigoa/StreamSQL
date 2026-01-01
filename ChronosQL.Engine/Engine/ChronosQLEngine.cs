@@ -102,7 +102,7 @@ public sealed class ChronosQLEngine
         CancellationToken cancellationToken = default)
     {
         var results = await ExecuteBatchAsync(sql, input, cancellationToken);
-        return results.Select(JsonSerializer.Serialize).ToList();
+        return results.Select(e => JsonSerializer.Serialize(e)).ToList();
     }
 
     public async Task<IReadOnlyList<string>> ExecuteBatchAsJsonAsync(
@@ -111,7 +111,7 @@ public sealed class ChronosQLEngine
         CancellationToken cancellationToken = default)
     {
         var results = await ExecuteBatchAsync(sql, jsonLines, cancellationToken);
-        return results.Select(JsonSerializer.Serialize).ToList();
+        return results.Select(e => JsonSerializer.Serialize(e)).ToList();
     }
 
     public StreamingQuery CreateStreamingQuery(string sql)
