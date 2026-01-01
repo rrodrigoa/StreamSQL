@@ -417,7 +417,7 @@ public class StreamSqlEndToEndTests
             "Malformed JSON should throw.",
             UseStdin: true,
             ExpectError: true,
-            ExpectedExceptionType: typeof(JsonReaderException));
+            ExpectedExceptionType: typeof(System.Text.Json.JsonReaderException));
 
         yield return new EndToEndCase(
             "D43-NonSTDIN malformed JSON line",
@@ -427,7 +427,7 @@ public class StreamSqlEndToEndTests
             Array.Empty<string>(),
             "Malformed JSON should throw.",
             ExpectError: true,
-            ExpectedExceptionType: typeof(JsonReaderException));
+            ExpectedExceptionType: typeof(System.Text.Json.JsonReaderException));
 
         yield return new EndToEndCase(
             "D44 large stdin",

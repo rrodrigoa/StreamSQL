@@ -61,7 +61,7 @@ public sealed class JsonLineReader
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                return new BatchReadResult(events, isCompleted: true);
+                return new BatchReadResult(events, IsCompleted: true);
             }
 
             if (line is null)
@@ -72,7 +72,7 @@ public sealed class JsonLineReader
                     continue;
                 }
 
-                return new BatchReadResult(events, isCompleted: true);
+                return new BatchReadResult(events, IsCompleted: true);
             }
 
             if (string.IsNullOrWhiteSpace(line))
@@ -106,7 +106,7 @@ public sealed class JsonLineReader
             events.Add(ParseLine(nextLine));
         }
 
-        return new BatchReadResult(events, isCompleted: false);
+        return new BatchReadResult(events, IsCompleted: false);
     }
 
     private bool IsFileInput => _fileStream is not null && !string.IsNullOrWhiteSpace(ResolvedFilePath);
