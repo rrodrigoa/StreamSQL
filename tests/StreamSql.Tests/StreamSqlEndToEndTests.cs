@@ -240,6 +240,32 @@ public class StreamSqlEndToEndTests
             "Group by with aliased output.");
 
         yield return new EndToEndCase(
+            "B26 HAVING filters aggregates",
+            "SELECT data.category, COUNT(*) AS count FROM input GROUP BY data.category HAVING COUNT(*) > 1",
+            Array.Empty<string>(),
+            "{\"data\":{\"category\":\"a\"}}\n{\"data\":{\"category\":\"b\"}}\n{\"data\":{\"category\":\"a\"}}\n",
+            new[] { "{\"category\":\"a\",\"count\":2}" },
+            "HAVING filters aggregated results.");
+
+        yield return new EndToEndCase(
+            "B27 HAVING with grouped field",
+            "SELECT data.category, COUNT(*) AS count FROM input GROUP BY data.category HAVING data.category = 'b'",
+            Array.Empty<string>(),
+            "{\"data\":{\"category\":\"a\"}}\n{\"data\":{\"category\":\"b\"}}\n{\"data\":{\"category\":\"b\"}}\n",
+            new[] { "{\"category\":\"b\",\"count\":2}" },
+            "HAVING can reference grouped fields.");
+
+        yield return new EndToEndCase(
+            "B28 HAVING without aggregate",
+            "SELECT data.value FROM input HAVING COUNT(*) > 1",
+            Array.Empty<string>(),
+            "{\"data\":{\"value\":1}}\n",
+            Array.Empty<string>(),
+            "HAVING requires an aggregate context.",
+            ExpectError: true,
+            ErrorContains: "HAVING without aggregate");
+
+        yield return new EndToEndCase(
             "C26 Tumbling window COUNT",
             "SELECT COUNT(*) FROM input",
             new[] { "--window", "tumbling:5s", "--timestamp-by", "ts" },

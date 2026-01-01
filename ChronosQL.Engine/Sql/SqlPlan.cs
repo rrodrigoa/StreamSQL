@@ -6,7 +6,9 @@ public sealed record SqlPlan(
     string? OutputStream,
     IReadOnlyList<SelectItem> SelectItems,
     IReadOnlyList<FieldReference> GroupBy,
+    IReadOnlyList<AggregateDefinition> Aggregates,
     FilterDefinition? Filter,
+    HavingDefinition? Having,
     IReadOnlyList<OrderByDefinition> OrderBy);
 
 public sealed record SelectItem(SelectItemKind Kind, FieldReference? Field, AggregateDefinition? Aggregate, string OutputName);
@@ -48,6 +50,18 @@ public enum FilterValueKind
     Number,
     String,
     Null
+}
+
+public sealed record HavingDefinition(IReadOnlyList<HavingCondition> Conditions);
+
+public sealed record HavingCondition(HavingOperand Operand, FilterOperator Operator, FilterValue Value);
+
+public sealed record HavingOperand(HavingOperandKind Kind, FieldReference? Field, AggregateDefinition? Aggregate);
+
+public enum HavingOperandKind
+{
+    GroupField,
+    Aggregate
 }
 
 public sealed record OrderByDefinition(string OutputName, SortDirection Direction);

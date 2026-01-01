@@ -107,6 +107,25 @@ public class StreamSqlLevel1Tests
                 "{\"windowStart\":11000,\"windowEnd\":16000,\"category\":\"b\",\"region\":\"west\",\"count\":2,\"total\":10}"
             },
             "Validate sliding windows per event timestamp and ordered output.");
+
+        yield return new EndToEndCase(
+            "L1 Tumbling window with HAVING",
+            "SELECT data.category, COUNT(*) AS count FROM input GROUP BY data.category HAVING COUNT(*) > 1",
+            new[] { "--window", "tumbling:5s", "--timestamp-by", "ts" },
+            string.Join('\n', new[]
+            {
+                "{\"ts\":1000,\"data\":{\"category\":\"a\"}}",
+                "{\"ts\":2000,\"data\":{\"category\":\"a\"}}",
+                "{\"ts\":3000,\"data\":{\"category\":\"b\"}}",
+                "{\"ts\":6000,\"data\":{\"category\":\"b\"}}",
+                "{\"ts\":7000,\"data\":{\"category\":\"b\"}}"
+            }) + "\n",
+            new[]
+            {
+                "{\"windowStart\":0,\"windowEnd\":5000,\"category\":\"a\",\"count\":2}",
+                "{\"windowStart\":5000,\"windowEnd\":10000,\"category\":\"b\",\"count\":2}"
+            },
+            "Validate HAVING filters windowed aggregates.");
     }
 
     private static async Task<string[]> ExecuteAsync(EndToEndCase testCase)

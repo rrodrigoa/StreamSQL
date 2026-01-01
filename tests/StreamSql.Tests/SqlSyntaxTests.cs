@@ -30,6 +30,8 @@ public class SqlSyntaxTests
         yield return new object[] { "Count star", "SELECT COUNT(*) FROM input" };
         yield return new object[] { "Avg", "SELECT AVG(data.value) FROM input" };
         yield return new object[] { "Group by", "SELECT data.category, COUNT(*) FROM input GROUP BY data.category" };
+        yield return new object[] { "Having with aggregate", "SELECT data.category, COUNT(*) FROM input GROUP BY data.category HAVING COUNT(*) > 1" };
+        yield return new object[] { "Having with grouped field", "SELECT data.category, COUNT(*) FROM input GROUP BY data.category HAVING data.category = 'a'" };
         yield return new object[] { "Order by", "SELECT data.value FROM input ORDER BY data.value DESC" };
     }
 
@@ -38,5 +40,8 @@ public class SqlSyntaxTests
         yield return new object[] { "Invalid SQL", "SELECT FROM input", "SQL parse error" };
         yield return new object[] { "Aggregate without group by", "SELECT data.value, COUNT(*) FROM input", "Aggregate queries must GROUP BY all non-aggregated fields." };
         yield return new object[] { "Group by mismatch", "SELECT data.a, COUNT(*) FROM input GROUP BY data.b", "GROUP BY mismatch" };
+        yield return new object[] { "Having without aggregate", "SELECT data.value FROM input HAVING COUNT(*) > 1", "HAVING without aggregate" };
+        yield return new object[] { "Having without group by", "SELECT COUNT(*) FROM input HAVING data.value > 1", "HAVING column requires GROUP BY" };
+        yield return new object[] { "Having group by mismatch", "SELECT data.a, COUNT(*) FROM input GROUP BY data.a HAVING data.b > 1", "HAVING column must appear in GROUP BY" };
     }
 }
