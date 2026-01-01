@@ -23,7 +23,7 @@ public static class Program
 
         var sqlText = options.QueryText ?? await File.ReadAllTextAsync(options.QueryFilePath!);
         await using var inputStream = StreamReaderFactory.OpenInput(options);
-        var jsonReader = new JsonLineReader(inputStream, options.Follow);
+        var jsonReader = new JsonLineReader(inputStream, options.Follow, options.InputFilePath);
 
         await using var outputStream = StreamReaderFactory.OpenOutput(options);
         var jsonWriter = new JsonLineWriter(outputStream);
@@ -34,9 +34,43 @@ public static class Program
             Follow = options.Follow,
             Window = options.Window
         });
-        var results = engine.ExecuteAsync(sqlText, jsonReader.ReadAllAsync());
+        var plan = engine.Parse(sqlText);
+        using var shutdown = new CancellationTokenSource();
+        var stopRequested = false;
 
-        await jsonWriter.WriteAllAsync(results);
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            stopRequested = true;
+            shutdown.Cancel();
+        };
+
+        while (!stopRequested)
+        {
+            var batch = await jsonReader.ReadAvailableBatchAsync(shutdown.Token);
+            if (batch.IsCompleted && batch.Events.Count == 0)
+            {
+                break;
+            }
+
+            if (batch.Events.Count == 0)
+            {
+                continue;
+            }
+
+            await using var query = engine.CreateStreamingQuery(plan);
+            var writeTask = jsonWriter.WriteAllAsync(query.Results);
+
+            foreach (var inputEvent in batch.Events)
+            {
+                await query.EnqueueAsync(inputEvent.Payload, inputEvent.ArrivalTime);
+            }
+
+            query.Complete();
+            await writeTask;
+        }
+
+        await outputStream.FlushAsync();
         return 0;
     }
 }
