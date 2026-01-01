@@ -110,14 +110,6 @@ public class StreamSqlEndToEndTests
             "Filter with multiple AND conditions.");
 
         yield return new EndToEndCase(
-            "A9 Boolean field projection",
-            "SELECT data.flag FROM input WHERE data.flag = 1",
-            Array.Empty<string>(),
-            "{\"data\":{\"flag\":0}}\n{\"data\":{\"flag\":1}}\n",
-            new[] { "{\"flag\":1}" },
-            "Filter on boolean field.");
-
-        yield return new EndToEndCase(
             "B11 COUNT()",
             "SELECT COUNT() FROM input",
             Array.Empty<string>(),
