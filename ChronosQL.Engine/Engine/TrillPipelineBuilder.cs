@@ -359,41 +359,28 @@ public sealed class TrillPipelineBuilder
                 return false;
             }
 
-            if (condition.Value.Kind == FilterValueKind.Number)
+            if (condition.Value.Kind != FilterValueKind.Number)
             {
-                if (value.ValueKind != JsonValueKind.Number || !value.TryGetDouble(out var numeric))
-                {
-                    return false;
-                }
-
-                var expected = condition.Value.Number;
-                var match = condition.Operator switch
-                {
-                    FilterOperator.GreaterThan => numeric > expected,
-                    FilterOperator.LessThan => numeric < expected,
-                    FilterOperator.Equals => numeric.Equals(expected),
-                    _ => false
-                };
-
-                if (!match)
-                {
-                    return false;
-                }
+                return false;
             }
-            else
-            {
-                if (value.ValueKind != JsonValueKind.True && value.ValueKind != JsonValueKind.False)
-                {
-                    return false;
-                }
 
-                var actual = value.ValueKind == JsonValueKind.True;
-                var expected = condition.Value.Boolean;
-                var match = condition.Operator == FilterOperator.Equals && actual == expected;
-                if (!match)
-                {
-                    return false;
-                }
+            if (value.ValueKind != JsonValueKind.Number || !value.TryGetDouble(out var numeric))
+            {
+                return false;
+            }
+
+            var expected = condition.Value.Number;
+            var match = condition.Operator switch
+            {
+                FilterOperator.GreaterThan => numeric > expected,
+                FilterOperator.LessThan => numeric < expected,
+                FilterOperator.Equals => numeric.Equals(expected),
+                _ => false
+            };
+
+            if (!match)
+            {
+                return false;
             }
         }
 

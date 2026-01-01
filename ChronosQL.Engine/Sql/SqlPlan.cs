@@ -41,12 +41,11 @@ public sealed record FilterDefinition(IReadOnlyList<FilterCondition> Conditions)
 
 public sealed record FilterCondition(FieldReference Field, FilterOperator Operator, FilterValue Value);
 
-public sealed record FilterValue(FilterValueKind Kind, double Number, bool Boolean, string String);
+public sealed record FilterValue(FilterValueKind Kind, double Number, string String);
 
 public enum FilterValueKind
 {
     Number,
-    Boolean,
     String,
     Null
 }

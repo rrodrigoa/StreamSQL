@@ -465,15 +465,7 @@ public static class SqlParser
                 case IntegerLiteral integerLiteral
                     when double.TryParse(integerLiteral.Value, out var integer):
                     {
-                        // Interpret 0 / 1 as boolean when needed
-                        if (integer == 0 || integer == 1)
-                        {
-                            value = new FilterValue(FilterValueKind.Boolean, 0, integer == 1, string.Empty);
-                        }
-                        else
-                        {
-                            value = new FilterValue(FilterValueKind.Number, integer, false, string.Empty);
-                        }
+                        value = new FilterValue(FilterValueKind.Number, integer, string.Empty);
 
                         return true;
                     }
@@ -481,19 +473,19 @@ public static class SqlParser
                 case NumericLiteral numericLiteral
                     when double.TryParse(numericLiteral.Value, out var numeric):
                     {
-                        value = new FilterValue(FilterValueKind.Number, numeric, false, string.Empty);
+                        value = new FilterValue(FilterValueKind.Number, numeric, string.Empty);
                         return true;
                     }
 
                 case StringLiteral stringLiteral:
                     {
-                        value = new FilterValue(FilterValueKind.String, 0, false, stringLiteral.Value);
+                        value = new FilterValue(FilterValueKind.String, 0, stringLiteral.Value);
                         return true;
                     }
 
                 case NullLiteral:
                     {
-                        value = new FilterValue(FilterValueKind.Null, 0, false, string.Empty);
+                        value = new FilterValue(FilterValueKind.Null, 0, string.Empty);
                         return true;
                     }
 

@@ -27,7 +27,6 @@ public class SqlSyntaxTests
         yield return new object[] { "Alias", "SELECT data.value AS v FROM input" };
         yield return new object[] { "Multiple fields", "SELECT data.value, data.other FROM input" };
         yield return new object[] { "Where and", "SELECT data.value FROM input WHERE data.value > 10 AND data.other < 5" };
-        yield return new object[] { "Boolean filter", "SELECT data.flag FROM input WHERE data.flag = 1" };
         yield return new object[] { "Count star", "SELECT COUNT(*) FROM input" };
         yield return new object[] { "Avg", "SELECT AVG(data.value) FROM input" };
         yield return new object[] { "Group by", "SELECT data.category, COUNT(*) FROM input GROUP BY data.category" };
