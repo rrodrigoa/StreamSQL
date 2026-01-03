@@ -31,8 +31,7 @@ public sealed class ChronosQLEngine
         var pipeline = new TrillPipelineBuilder(
             Options.TimestampField,
             Options.Follow,
-            plan,
-            Options.Window);
+            plan);
 
         return pipeline.ExecuteAsync(input, cancellationToken);
     }
@@ -125,8 +124,7 @@ public sealed class ChronosQLEngine
         var pipeline = new TrillPipelineBuilder(
             Options.TimestampField,
             Options.Follow,
-            plan,
-            Options.Window);
+            plan);
 
         return new StreamingQuery(pipeline);
     }

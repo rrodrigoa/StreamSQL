@@ -33,6 +33,7 @@ public class SqlSyntaxTests
         yield return new object[] { "Having with aggregate", "SELECT data.category, COUNT(*) FROM input GROUP BY data.category HAVING COUNT(*) > 1" };
         yield return new object[] { "Having with grouped field", "SELECT data.category, COUNT(*) FROM input GROUP BY data.category HAVING data.category = 'a'" };
         yield return new object[] { "Order by", "SELECT data.value FROM input ORDER BY data.value DESC" };
+        yield return new object[] { "Window in group by", "SELECT COUNT(*) FROM input GROUP BY TUMBLINGWINDOW(second, 5)" };
     }
 
     public static IEnumerable<object[]> ParserErrorCases()
@@ -43,5 +44,9 @@ public class SqlSyntaxTests
         yield return new object[] { "Having without aggregate", "SELECT data.value FROM input HAVING COUNT(*) > 1", "Unsupported SQL syntax detected" };
         yield return new object[] { "Having without group by", "SELECT COUNT(*) FROM input HAVING data.value > 1", "HAVING column requires GROUP BY" };
         yield return new object[] { "Having group by mismatch", "SELECT data.a, COUNT(*) FROM input GROUP BY data.a HAVING data.b > 1", "HAVING column must appear in GROUP BY" };
+        yield return new object[] { "Window outside group by", "SELECT TUMBLINGWINDOW(second, 5) FROM input", "Window functions are only supported in GROUP BY." };
+        yield return new object[] { "Multiple window functions", "SELECT COUNT(*) FROM input GROUP BY TUMBLINGWINDOW(second, 5), SLIDINGWINDOW(second, 1)", "Only one window function can appear in GROUP BY." };
+        yield return new object[] { "Invalid time unit", "SELECT COUNT(*) FROM input GROUP BY TUMBLINGWINDOW(weeks, 5)", "Unsupported time unit" };
+        yield return new object[] { "Non-numeric window size", "SELECT COUNT(*) FROM input GROUP BY TUMBLINGWINDOW(second, 'five')", "Window size must be a positive integer literal." };
     }
 }
