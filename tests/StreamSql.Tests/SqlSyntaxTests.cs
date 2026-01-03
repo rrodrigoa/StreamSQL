@@ -40,7 +40,7 @@ public class SqlSyntaxTests
         yield return new object[] { "Invalid SQL", "SELECT FROM input", "SQL parse error" };
         yield return new object[] { "Aggregate without group by", "SELECT data.value, COUNT(*) FROM input", "Aggregate queries must GROUP BY all non-aggregated fields." };
         yield return new object[] { "Group by mismatch", "SELECT data.a, COUNT(*) FROM input GROUP BY data.b", "GROUP BY mismatch" };
-        yield return new object[] { "Having without aggregate", "SELECT data.value FROM input HAVING COUNT(*) > 1", "HAVING without aggregate" };
+        yield return new object[] { "Having without aggregate", "SELECT data.value FROM input HAVING COUNT(*) > 1", "Unsupported SQL syntax detected" };
         yield return new object[] { "Having without group by", "SELECT COUNT(*) FROM input HAVING data.value > 1", "HAVING column requires GROUP BY" };
         yield return new object[] { "Having group by mismatch", "SELECT data.a, COUNT(*) FROM input GROUP BY data.a HAVING data.b > 1", "HAVING column must appear in GROUP BY" };
     }

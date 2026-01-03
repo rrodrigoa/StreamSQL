@@ -699,6 +699,4 @@ public sealed class TrillPipelineBuilder
                 return false;
         }
     }
-
-    }
 }

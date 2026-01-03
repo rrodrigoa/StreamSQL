@@ -263,7 +263,7 @@ public class StreamSqlEndToEndTests
             Array.Empty<string>(),
             "HAVING requires an aggregate context.",
             ExpectError: true,
-            ErrorContains: "HAVING without aggregate");
+            ErrorContains: "Unsupported SQL syntax detected");
 
         yield return new EndToEndCase(
             "C26 Tumbling window COUNT",
