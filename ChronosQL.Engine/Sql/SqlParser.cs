@@ -1,4 +1,5 @@
 using Microsoft.SqlServer.TransactSql.ScriptDom;
+using ChronosQL.Engine;
 using System.Text.RegularExpressions;
 
 namespace ChronosQL.Engine.Sql;
@@ -32,6 +33,7 @@ public static class SqlParser
             visitor.OutputStream,
             visitor.SelectItems,
             visitor.GroupBy,
+            visitor.Window,
             visitor.Aggregates,
             visitor.Filter,
             visitor.Having,
@@ -46,6 +48,7 @@ public static class SqlParser
         public string? OutputStream { get; private set; }
         public List<SelectItem> SelectItems { get; } = new();
         public List<FieldReference> GroupBy { get; } = new();
+        public WindowDefinition? Window { get; private set; }
         public List<AggregateDefinition> Aggregates { get; } = new();
         public FilterDefinition? Filter { get; private set; }
         public HavingDefinition? Having { get; private set; }
@@ -98,6 +101,12 @@ public static class SqlParser
 
                 if (scalar.Expression is FunctionCall functionCall)
                 {
+                    if (IsWindowFunction(functionCall))
+                    {
+                        Unsupported.Add("Window functions are only supported in GROUP BY.");
+                        continue;
+                    }
+
                     if (!TryBuildAggregate(functionCall, scalar.ColumnName?.Value, InputStream, out var aggregate, out var error))
                     {
                         Unsupported.Add(error ?? "SELECT aggregate");
@@ -137,6 +146,24 @@ public static class SqlParser
                     {
                         if (expression is not ColumnReferenceExpression column)
                         {
+                            if (expression is FunctionCall functionCall)
+                            {
+                                if (!TryBuildWindowDefinition(functionCall, out var windowDefinition, out var error))
+                                {
+                                    Unsupported.Add(error ?? "GROUP BY expression");
+                                    continue;
+                                }
+
+                                if (Window is not null)
+                                {
+                                    Unsupported.Add("Only one window function can appear in GROUP BY.");
+                                    continue;
+                                }
+
+                                Window = windowDefinition;
+                                continue;
+                            }
+
                             Unsupported.Add("GROUP BY expression");
                             continue;
                         }
@@ -281,6 +308,12 @@ public static class SqlParser
 
             if (element.Expression is FunctionCall functionCall)
             {
+                if (IsWindowFunction(functionCall))
+                {
+                    error = "Window functions are only supported in GROUP BY.";
+                    return false;
+                }
+
                 if (!TryBuildAggregate(functionCall, null, InputStream, out var aggregate, out error))
                 {
                     return false;
@@ -464,6 +497,12 @@ public static class SqlParser
                 return true;
             }
 
+            if (comparison.FirstExpression is FunctionCall functionCall && IsWindowFunction(functionCall))
+            {
+                error = "Window functions are only supported in GROUP BY.";
+                return false;
+            }
+
             error = "WHERE clause";
             return false;
         }
@@ -532,6 +571,12 @@ public static class SqlParser
 
             if (comparison.FirstExpression is FunctionCall functionCall)
             {
+                if (IsWindowFunction(functionCall))
+                {
+                    error = "Window functions are only supported in GROUP BY.";
+                    return false;
+                }
+
                 if (!TryBuildAggregate(functionCall, null, InputStream, out var aggregate, out error))
                 {
                     return false;
@@ -618,6 +663,12 @@ public static class SqlParser
             error = null;
 
             var functionName = functionCall.FunctionName.Value;
+            if (IsWindowFunctionName(functionName))
+            {
+                error = "Window functions are only supported in GROUP BY.";
+                return false;
+            }
+
             if (!TryGetAggregateType(functionName, out var aggregateType))
             {
                 return false;
@@ -702,6 +753,200 @@ public static class SqlParser
                 default:
                     return false;
             }
+        }
+
+        private static bool IsWindowFunction(FunctionCall functionCall) =>
+            IsWindowFunctionName(functionCall.FunctionName.Value);
+
+        private static bool IsWindowFunctionName(string functionName) =>
+            functionName.Equals("TUMBLINGWINDOW", StringComparison.OrdinalIgnoreCase) ||
+            functionName.Equals("HOPPINGWINDOW", StringComparison.OrdinalIgnoreCase) ||
+            functionName.Equals("SLIDINGWINDOW", StringComparison.OrdinalIgnoreCase);
+
+        private static bool TryBuildWindowDefinition(
+            FunctionCall functionCall,
+            out WindowDefinition? windowDefinition,
+            out string? error)
+        {
+            windowDefinition = null;
+            error = null;
+
+            if (!IsWindowFunction(functionCall))
+            {
+                error = "GROUP BY expression";
+                return false;
+            }
+
+            if (!TryGetWindowParameters(functionCall, out var windowType, out var size, out var hop, out error))
+            {
+                return false;
+            }
+
+            windowDefinition = new WindowDefinition(windowType, size, hop);
+            return true;
+        }
+
+        private static bool TryGetWindowParameters(
+            FunctionCall functionCall,
+            out WindowType windowType,
+            out TimeSpan size,
+            out TimeSpan? hop,
+            out string? error)
+        {
+            windowType = WindowType.Tumbling;
+            size = default;
+            hop = null;
+            error = null;
+
+            var upperName = functionCall.FunctionName.Value.ToUpperInvariant();
+            if (upperName == "TUMBLINGWINDOW")
+            {
+                windowType = WindowType.Tumbling;
+                if (functionCall.Parameters.Count != 2)
+                {
+                    error = "TUMBLINGWINDOW expects (time_unit, size).";
+                    return false;
+                }
+
+                if (!TryGetTimeUnit(functionCall.Parameters[0], out var unit, out error) ||
+                    !TryGetWindowSize(functionCall.Parameters[1], unit, out size, out error))
+                {
+                    return false;
+                }
+
+                return true;
+            }
+
+            if (upperName == "HOPPINGWINDOW")
+            {
+                windowType = WindowType.Hopping;
+                if (functionCall.Parameters.Count != 3)
+                {
+                    error = "HOPPINGWINDOW expects (time_unit, window_size, hop_size).";
+                    return false;
+                }
+
+                if (!TryGetTimeUnit(functionCall.Parameters[0], out var unit, out error) ||
+                    !TryGetWindowSize(functionCall.Parameters[1], unit, out size, out error) ||
+                    !TryGetWindowSize(functionCall.Parameters[2], unit, out var hopSize, out error))
+                {
+                    return false;
+                }
+
+                hop = hopSize;
+                return true;
+            }
+
+            if (upperName == "SLIDINGWINDOW")
+            {
+                windowType = WindowType.Sliding;
+                if (functionCall.Parameters.Count != 2)
+                {
+                    error = "SLIDINGWINDOW expects (time_unit, window_size).";
+                    return false;
+                }
+
+                if (!TryGetTimeUnit(functionCall.Parameters[0], out var unit, out error) ||
+                    !TryGetWindowSize(functionCall.Parameters[1], unit, out size, out error))
+                {
+                    return false;
+                }
+
+                return true;
+            }
+
+            error = "Unsupported window function.";
+            return false;
+        }
+
+        private static bool TryGetTimeUnit(
+            ScalarExpression expression,
+            out TimeSpan unit,
+            out string? error)
+        {
+            unit = default;
+            error = null;
+
+            if (expression is not ColumnReferenceExpression column ||
+                column.MultiPartIdentifier?.Identifiers is null ||
+                column.MultiPartIdentifier.Identifiers.Count != 1)
+            {
+                error = "Window time unit must be an identifier.";
+                return false;
+            }
+
+            var identifier = column.MultiPartIdentifier.Identifiers[0].Value;
+            switch (identifier.ToLowerInvariant())
+            {
+                case "millisecond":
+                    unit = TimeSpan.FromMilliseconds(1);
+                    return true;
+                case "second":
+                    unit = TimeSpan.FromSeconds(1);
+                    return true;
+                case "minute":
+                    unit = TimeSpan.FromMinutes(1);
+                    return true;
+                case "hour":
+                    unit = TimeSpan.FromHours(1);
+                    return true;
+                case "day":
+                    unit = TimeSpan.FromDays(1);
+                    return true;
+            }
+
+            error = $"Unsupported time unit '{identifier}'.";
+            return false;
+        }
+
+        private static bool TryGetWindowSize(
+            ScalarExpression expression,
+            TimeSpan unit,
+            out TimeSpan size,
+            out string? error)
+        {
+            size = default;
+            error = null;
+
+            if (!TryGetPositiveInteger(expression, out var value))
+            {
+                error = "Window size must be a positive integer literal.";
+                return false;
+            }
+
+            try
+            {
+                size = TimeSpan.FromTicks(checked(unit.Ticks * value));
+            }
+            catch (OverflowException)
+            {
+                error = "Window size is too large.";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryGetPositiveInteger(ScalarExpression expression, out long value)
+        {
+            value = 0;
+            if (expression is IntegerLiteral integerLiteral &&
+                long.TryParse(integerLiteral.Value, out var integerValue) &&
+                integerValue > 0)
+            {
+                value = integerValue;
+                return true;
+            }
+
+            if (expression is NumericLiteral numericLiteral &&
+                long.TryParse(numericLiteral.Value, out var numericValue) &&
+                numericValue > 0)
+            {
+                value = numericValue;
+                return true;
+            }
+
+            return false;
         }
 
         private void ValidateAggregates()

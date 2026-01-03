@@ -34,8 +34,8 @@ public class StreamSqlLevel1Tests
     {
         yield return new EndToEndCase(
             "L1 Tumbling window with multiple fields",
-            "SELECT data.category, data.region, COUNT(*) AS count, SUM(data.value) AS total FROM input GROUP BY data.category, data.region",
-            new[] { "--window", "tumbling:5s", "--timestamp-by", "ts" },
+            "SELECT data.category, data.region, COUNT(*) AS count, SUM(data.value) AS total FROM input GROUP BY TUMBLINGWINDOW(second, 5), data.category, data.region",
+            new[] { "--timestamp-by", "ts" },
             string.Join('\n', new[]
             {
                 "{\"ts\":1000,\"data\":{\"category\":\"a\",\"region\":\"east\",\"value\":2}}",
@@ -58,9 +58,9 @@ public class StreamSqlLevel1Tests
             "Validate tumbling windows across multiple fields and shared timestamps.");
 
         yield return new EndToEndCase(
-            "L1 Rolling window with ordering",
-            "SELECT data.category, COUNT(*) AS count, MAX(data.value) AS maxValue FROM input GROUP BY data.category ORDER BY windowStart DESC, count DESC",
-            new[] { "--window", "rolling:10s,5s", "--timestamp-by", "ts" },
+            "L1 Hopping window with ordering",
+            "SELECT data.category, COUNT(*) AS count, MAX(data.value) AS maxValue FROM input GROUP BY HOPPINGWINDOW(second, 10, 5), data.category ORDER BY windowStart DESC, count DESC",
+            new[] { "--timestamp-by", "ts" },
             string.Join('\n', new[]
             {
                 "{\"ts\":0,\"data\":{\"category\":\"a\",\"value\":1}}",
@@ -85,8 +85,8 @@ public class StreamSqlLevel1Tests
 
         yield return new EndToEndCase(
             "L1 Sliding window with complex grouping",
-            "SELECT data.category, data.region, COUNT(*) AS count, SUM(data.value) AS total FROM input GROUP BY data.category, data.region ORDER BY windowEnd ASC, category ASC",
-            new[] { "--window", "sliding:5s", "--timestamp-by", "ts" },
+            "SELECT data.category, data.region, COUNT(*) AS count, SUM(data.value) AS total FROM input GROUP BY SLIDINGWINDOW(second, 5), data.category, data.region ORDER BY windowEnd ASC, category ASC",
+            new[] { "--timestamp-by", "ts" },
             string.Join('\n', new[]
             {
                 "{\"ts\":6000,\"data\":{\"category\":\"a\",\"region\":\"east\",\"value\":1}}",
@@ -110,8 +110,8 @@ public class StreamSqlLevel1Tests
 
         yield return new EndToEndCase(
             "L1 Tumbling window with HAVING",
-            "SELECT data.category, COUNT(*) AS count FROM input GROUP BY data.category HAVING COUNT(*) > 1",
-            new[] { "--window", "tumbling:5s", "--timestamp-by", "ts" },
+            "SELECT data.category, COUNT(*) AS count FROM input GROUP BY TUMBLINGWINDOW(second, 5), data.category HAVING COUNT(*) > 1",
+            new[] { "--timestamp-by", "ts" },
             string.Join('\n', new[]
             {
                 "{\"ts\":1000,\"data\":{\"category\":\"a\"}}",
@@ -126,6 +126,93 @@ public class StreamSqlLevel1Tests
                 "{\"windowStart\":5000,\"windowEnd\":10000,\"category\":\"b\",\"count\":2}"
             },
             "Validate HAVING filters windowed aggregates.");
+
+        yield return new EndToEndCase(
+            "L1 Tumbling window with WHERE (millisecond)",
+            "SELECT COUNT(*) AS count FROM input WHERE data.value > 2 GROUP BY TUMBLINGWINDOW(millisecond, 500)",
+            new[] { "--timestamp-by", "ts" },
+            string.Join('\n', new[]
+            {
+                "{\"ts\":100,\"data\":{\"value\":1}}",
+                "{\"ts\":200,\"data\":{\"value\":3}}",
+                "{\"ts\":700,\"data\":{\"value\":4}}"
+            }) + "\n",
+            new[]
+            {
+                "{\"windowStart\":0,\"windowEnd\":500,\"count\":1}",
+                "{\"windowStart\":500,\"windowEnd\":1000,\"count\":1}"
+            },
+            "Validate millisecond tumbling windows with WHERE filters.");
+
+        yield return new EndToEndCase(
+            "L1 Tumbling window aggregates (minute)",
+            "SELECT AVG(data.value) AS avg, MIN(data.value) AS minValue, MAX(data.value) AS maxValue FROM input GROUP BY TUMBLINGWINDOW(minute, 1)",
+            new[] { "--timestamp-by", "ts" },
+            string.Join('\n', new[]
+            {
+                "{\"ts\":1000,\"data\":{\"value\":1}}",
+                "{\"ts\":2000,\"data\":{\"value\":5}}",
+                "{\"ts\":3000,\"data\":{\"value\":3}}"
+            }) + "\n",
+            new[]
+            {
+                "{\"windowStart\":0,\"windowEnd\":60000,\"avg\":3,\"minValue\":1,\"maxValue\":5}"
+            },
+            "Validate minute tumbling windows with AVG, MIN, and MAX.");
+
+        yield return new EndToEndCase(
+            "L1 Hopping window out-of-order timestamps (millisecond)",
+            "SELECT COUNT(*) AS count FROM input GROUP BY HOPPINGWINDOW(millisecond, 1000, 500)",
+            new[] { "--timestamp-by", "ts" },
+            string.Join('\n', new[]
+            {
+                "{\"ts\":1200}",
+                "{\"ts\":200}",
+                "{\"ts\":700}"
+            }) + "\n",
+            new[]
+            {
+                "{\"windowStart\":0,\"windowEnd\":1000,\"count\":2}",
+                "{\"windowStart\":500,\"windowEnd\":1500,\"count\":2}",
+                "{\"windowStart\":1000,\"windowEnd\":2000,\"count\":1}"
+            },
+            "Validate hopping windows with out-of-order events.");
+
+        yield return new EndToEndCase(
+            "L1 Hopping window single event (minute)",
+            "SELECT COUNT(*) AS count FROM input GROUP BY HOPPINGWINDOW(minute, 2, 1)",
+            new[] { "--timestamp-by", "ts" },
+            "{\"ts\":65000}\n",
+            new[]
+            {
+                "{\"windowStart\":0,\"windowEnd\":120000,\"count\":1}",
+                "{\"windowStart\":60000,\"windowEnd\":180000,\"count\":1}"
+            },
+            "Validate hopping windows with a single event.");
+
+        yield return new EndToEndCase(
+            "L1 Sliding window empty input (millisecond)",
+            "SELECT COUNT(*) AS count FROM input GROUP BY SLIDINGWINDOW(millisecond, 500)",
+            new[] { "--timestamp-by", "ts" },
+            string.Empty,
+            Array.Empty<string>(),
+            "Validate sliding windows handle empty input.");
+
+        yield return new EndToEndCase(
+            "L1 Sliding window mixed timestamps (minute)",
+            "SELECT COUNT(*) AS count FROM input GROUP BY SLIDINGWINDOW(minute, 1)",
+            new[] { "--timestamp-by", "ts" },
+            string.Join('\n', new[]
+            {
+                "{\"ts\":65000}",
+                "{\"ts\":\"1970-01-01T00:01:10Z\"}"
+            }) + "\n",
+            new[]
+            {
+                "{\"windowStart\":5000,\"windowEnd\":65000,\"count\":1}",
+                "{\"windowStart\":10000,\"windowEnd\":70000,\"count\":2}"
+            },
+            "Validate sliding windows with mixed timestamp formats.");
     }
 
     private static async Task<string[]> ExecuteAsync(EndToEndCase testCase)
@@ -141,8 +228,15 @@ public class StreamSqlLevel1Tests
             await File.WriteAllTextAsync(outputPath, string.Empty);
 
             var fullArgs = args.Concat(new[] { "--file", inputPath, "--out", outputPath }).ToArray();
+            var previousError = Console.Error;
+            var errorWriter = new StringWriter();
+            Console.SetError(errorWriter);
             var exitCode = await Program.Main(fullArgs);
-            Assert.Equal(0, exitCode);
+            Console.SetError(previousError);
+            if (exitCode != 0)
+            {
+                throw new InvalidOperationException(errorWriter.ToString().Trim());
+            }
 
             var output = await File.ReadAllTextAsync(outputPath);
             return output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
