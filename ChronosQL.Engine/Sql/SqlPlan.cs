@@ -1,3 +1,5 @@
+using ChronosQL.Engine;
+
 namespace ChronosQL.Engine.Sql;
 
 public sealed record SqlPlan(
@@ -6,6 +8,7 @@ public sealed record SqlPlan(
     string? OutputStream,
     IReadOnlyList<SelectItem> SelectItems,
     IReadOnlyList<FieldReference> GroupBy,
+    WindowDefinition? Window,
     IReadOnlyList<AggregateDefinition> Aggregates,
     FilterDefinition? Filter,
     HavingDefinition? Having,

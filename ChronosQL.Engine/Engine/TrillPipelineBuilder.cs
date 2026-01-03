@@ -13,12 +13,12 @@ public sealed class TrillPipelineBuilder
     private readonly SqlPlan _plan;
     private readonly WindowDefinition? _window;
 
-    public TrillPipelineBuilder(string timestampField, bool follow, SqlPlan plan, WindowDefinition? window)
+    public TrillPipelineBuilder(string timestampField, bool follow, SqlPlan plan)
     {
         _timestampField = timestampField;
         _follow = follow;
         _plan = plan;
-        _window = window;
+        _window = plan.Window;
     }
 
     public async IAsyncEnumerable<JsonElement> ExecuteAsync(IAsyncEnumerable<InputEvent> input, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
