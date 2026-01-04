@@ -7,34 +7,44 @@ public static class StreamReaderFactory
     public static Stream? InputOverride { get; set; }
     public static Stream? OutputOverride { get; set; }
 
-    public static Stream OpenInput(CommandLineOptions options)
+    public static Stream OpenInput(InputSource source)
     {
-        if (string.IsNullOrWhiteSpace(options.InputFilePath))
+        if (source.Kind == InputSourceKind.Stdin)
         {
             if (InputOverride is not null)
             {
                 return new NonDisposingStream(InputOverride);
             }
 
-            return Console.OpenStandardInput();
+            return new NonDisposingStream(Console.OpenStandardInput());
         }
 
-        return new FileStream(options.InputFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        if (string.IsNullOrWhiteSpace(source.Path))
+        {
+            throw new InvalidOperationException("Input file path cannot be empty.");
+        }
+
+        return new FileStream(source.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
     }
 
-    public static Stream OpenOutput(CommandLineOptions options)
+    public static Stream OpenOutput(OutputDestination destination)
     {
-        if (string.IsNullOrWhiteSpace(options.OutputFilePath))
+        if (destination.Kind == OutputDestinationKind.Stdout)
         {
             if (OutputOverride is not null)
             {
                 return new NonDisposingStream(OutputOverride);
             }
 
-            return Console.OpenStandardOutput();
+            return new NonDisposingStream(Console.OpenStandardOutput());
         }
 
-        return new FileStream(options.OutputFilePath, FileMode.Create, FileAccess.Write, FileShare.Read);
+        if (string.IsNullOrWhiteSpace(destination.Path))
+        {
+            throw new InvalidOperationException("Output file path cannot be empty.");
+        }
+
+        return new FileStream(destination.Path, FileMode.Create, FileAccess.Write, FileShare.Read);
     }
 
     private sealed class NonDisposingStream : Stream

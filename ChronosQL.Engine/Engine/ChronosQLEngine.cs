@@ -14,6 +14,8 @@ public sealed class ChronosQLEngine
 
     public SqlPlan Parse(string sql) => SqlParser.Parse(sql);
 
+    public SqlScriptPlan ParseScript(string sql) => SqlParser.ParseScript(sql);
+
     public IAsyncEnumerable<JsonElement> ExecuteAsync(
         string sql,
         IAsyncEnumerable<InputEvent> input,
