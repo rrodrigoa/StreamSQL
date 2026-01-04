@@ -83,7 +83,7 @@ public class TimestampByTests
     private static async Task<string[]> ExecuteAsync(ChronosQLEngine engine, SqlPlan plan, IEnumerable<InputEvent> events)
     {
         var results = await engine.ExecuteBatchAsync(plan, events);
-        return results.Select(JsonSerializer.Serialize).ToArray();
+        return results.Select(e => JsonSerializer.Serialize(e)).ToArray();
     }
 
     private static InputEvent BuildEvent(string json, long arrivalTime)
