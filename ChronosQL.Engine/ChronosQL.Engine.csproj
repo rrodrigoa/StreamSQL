@@ -10,11 +10,16 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.SqlServer.TransactSql.ScriptDom" Version="170.147.0" />
     <PackageReference Include="System.Reactive.Linq" Version="6.1.0" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Trill\Sources\Core\Microsoft.StreamProcessing\Microsoft.StreamProcessing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Microsoft.SqlServer.TransactSql.ScriptDom">
+      <HintPath>..\SqlScriptDOM\out\Debug\net8.0\Microsoft.SqlServer.TransactSql.ScriptDom.dll</HintPath>
+    </Reference>
   </ItemGroup>
 </Project>

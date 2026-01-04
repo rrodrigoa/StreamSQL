@@ -9,7 +9,7 @@ public static class SqlParser
     public static SqlPlan Parse(string sql)
     {
         var normalizedSql = Regex.Replace(sql, @"COUNT\s*\(\s*\)", "COUNT(*)", RegexOptions.IgnoreCase);
-        var parser = new TSql150Parser(false);
+        var parser = new TSql170Parser(false);
         var fragment = parser.Parse(new StringReader(normalizedSql), out var errors);
 
         if (errors is { Count: > 0 })
@@ -148,9 +148,9 @@ public static class SqlParser
                         {
                             if (expression is FunctionCall functionCall)
                             {
-                                if (!TryBuildWindowDefinition(functionCall, out var windowDefinition, out var error))
+                                if (!TryBuildWindowDefinition(functionCall, out var windowDefinition, out var error1))
                                 {
-                                    Unsupported.Add(error ?? "GROUP BY expression");
+                                    Unsupported.Add(error1 ?? "GROUP BY expression");
                                     continue;
                                 }
 

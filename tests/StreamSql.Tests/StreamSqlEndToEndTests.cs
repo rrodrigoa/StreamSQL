@@ -47,6 +47,14 @@ public class StreamSqlEndToEndTests
     private static IEnumerable<EndToEndCase> BuildCases()
     {
         yield return new EndToEndCase(
+            "A0 TIMESTAMP BY",
+            "SELECT data.value FROM input TIMESTAMP BY input.ts",
+            Array.Empty<string>(),
+            "{\"data\":{\"value\":1}}\n{\"data\":{\"value\":2}}\n",
+            new[] { "{\"value\":1}", "{\"value\":2}" },
+            "Project a single JSON field.");
+
+        yield return new EndToEndCase(
             "A1 Single field projection",
             "SELECT data.value FROM input",
             Array.Empty<string>(),
