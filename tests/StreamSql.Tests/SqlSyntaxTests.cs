@@ -8,7 +8,7 @@ public class SqlSyntaxTests
     [Fact]
     public void ParsesMultiSelectScriptInOrder()
     {
-        var sql = "SELECT data.value FROM first INTO out1; SELECT data.value FROM second INTO out2;";
+        var sql = "SELECT data.value INTO out1 FROM first; SELECT data.value INTO out2 FROM second;";
 
         var scriptPlan = SqlParser.ParseScript(sql);
 

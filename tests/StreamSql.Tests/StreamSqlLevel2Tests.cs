@@ -12,8 +12,8 @@ public class StreamSqlLevel2Tests
     {
         var sql = string.Join(Environment.NewLine, new[]
         {
-            "SELECT data.value AS v FROM orders INTO orders_out;",
-            "SELECT data.value AS v FROM trades INTO trades_out;"
+            "SELECT data.value AS v INTO orders_out FROM orders;",
+            "SELECT data.value AS v INTO trades_out FROM trades;"
         });
 
         var ordersInput = string.Join('\n', new[]
@@ -80,8 +80,8 @@ public class StreamSqlLevel2Tests
     {
         var sql = string.Join(Environment.NewLine, new[]
         {
-            "SELECT data.value AS v FROM orders INTO first_out;",
-            "SELECT COUNT(*) AS count FROM orders INTO second_out;"
+            "SELECT data.value AS v INTO first_out FROM orders;",
+            "SELECT COUNT(*) AS count INTO second_out FROM orders;"
         });
 
         var input = string.Join('\n', new[]
@@ -121,7 +121,7 @@ public class StreamSqlLevel2Tests
 
             var singleSelectArgs = new[]
             {
-                "--query", "SELECT data.value AS v FROM orders INTO first_out;",
+                "--query", "SELECT data.value AS v INTO first_out FROM orders;",
                 "--input", $"orders={inputPath}",
                 "--output", $"first_out={firstOutputPath}"
             };
@@ -135,7 +135,7 @@ public class StreamSqlLevel2Tests
 
             var singleCountArgs = new[]
             {
-                "--query", "SELECT COUNT(*) AS count FROM orders INTO second_out;",
+                "--query", "SELECT COUNT(*) AS count INTO second_out FROM orders;",
                 "--input", $"orders={inputPath}",
                 "--output", $"second_out={secondOutputPath}"
             };
@@ -160,8 +160,8 @@ public class StreamSqlLevel2Tests
     {
         var sql = string.Join(Environment.NewLine, new[]
         {
-            "SELECT data.value FROM input INTO first_out;",
-            "SELECT data.value FROM input INTO second_out;"
+            "SELECT data.value INTO first_out FROM input;",
+            "SELECT data.value INTO second_out FROM input;"
         });
 
         var args = new[]
@@ -191,7 +191,7 @@ public class StreamSqlLevel2Tests
     [Fact]
     public async Task FailsWhenSelectReferencesUnknownInput()
     {
-        var sql = "SELECT data.value FROM missing INTO out1;";
+        var sql = "SELECT data.value INTO out1 FROM missing;";
         var args = new[] { "--query", sql, "--output", "out1=-" };
 
         var previousError = Console.Error;
@@ -213,7 +213,7 @@ public class StreamSqlLevel2Tests
     [Fact]
     public async Task FailsWhenSelectReferencesUnknownOutput()
     {
-        var sql = "SELECT data.value FROM input INTO missing;";
+        var sql = "SELECT data.value INTO missing FROM input;";
         var args = new[] { "--query", sql };
 
         var previousError = Console.Error;
