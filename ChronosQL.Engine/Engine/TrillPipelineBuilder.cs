@@ -8,17 +8,17 @@ namespace ChronosQL.Engine;
 public sealed class TrillPipelineBuilder
 {
     private const int BatchSize = 128;
-    private readonly string _timestampField;
     private readonly bool _follow;
     private readonly SqlPlan _plan;
     private readonly WindowDefinition? _window;
+    private readonly TimestampByDefinition? _timestampBy;
 
-    public TrillPipelineBuilder(string timestampField, bool follow, SqlPlan plan)
+    public TrillPipelineBuilder(bool follow, SqlPlan plan)
     {
-        _timestampField = timestampField;
         _follow = follow;
         _plan = plan;
         _window = plan.Window;
+        _timestampBy = plan.TimestampBy;
     }
 
     public async IAsyncEnumerable<JsonElement> ExecuteAsync(IAsyncEnumerable<InputEvent> input, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -307,46 +307,117 @@ public sealed class TrillPipelineBuilder
 
     private long ResolveTimestamp(JsonElement element, long arrivalTime)
     {
-        if (TryResolveTimestamp(element, _timestampField, out var resolved))
+        if (_timestampBy is null)
+        {
+            return arrivalTime;
+        }
+
+        if (TryResolveTimestamp(element, _timestampBy.Expression, out var resolved, out var error))
         {
             return resolved;
         }
 
-        return arrivalTime;
+        throw new InvalidOperationException(error ?? "TIMESTAMP BY expression did not evaluate to a valid timestamp.");
     }
 
-    private static bool TryResolveTimestamp(JsonElement element, string fieldPath, out long timestamp)
+    private static bool TryResolveTimestamp(
+        JsonElement element,
+        TimestampExpression expression,
+        out long timestamp,
+        out string? error)
     {
         timestamp = 0;
-        if (element.ValueKind != JsonValueKind.Object)
-        {
-            return false;
-        }
+        error = null;
 
-        var current = element;
-        var segments = fieldPath.Split('.', StringSplitOptions.RemoveEmptyEntries);
-        foreach (var segment in segments)
+        switch (expression)
         {
-            if (current.ValueKind != JsonValueKind.Object || !current.TryGetProperty(segment, out var next))
-            {
+            case TimestampFieldExpression fieldExpression:
+                if (!TryGetProperty(element, fieldExpression.Field.PathSegments, out var value))
+                {
+                    error = $"TIMESTAMP BY field '{string.Join('.', fieldExpression.Field.PathSegments)}' was not found.";
+                    return false;
+                }
+
+                return TryParseTimestampValue(value, out timestamp, out error);
+            case TimestampLiteralExpression literalExpression:
+                return TryParseTimestampLiteral(literalExpression.Value, out timestamp, out error);
+            default:
+                error = "Unsupported TIMESTAMP BY expression.";
                 return false;
+        }
+    }
+
+    private static bool TryParseTimestampLiteral(FilterValue literal, out long timestamp, out string? error)
+    {
+        timestamp = 0;
+        error = null;
+
+        return literal.Kind switch
+        {
+            FilterValueKind.Number => TryParseNumericTimestamp(literal.Number, out timestamp, out error),
+            FilterValueKind.String => TryParseStringTimestamp(literal.String, out timestamp, out error),
+            _ => FailTimestampParse("TIMESTAMP BY does not support NULL values.", out error)
+        };
+    }
+
+    private static bool TryParseTimestampValue(JsonElement value, out long timestamp, out string? error)
+    {
+        timestamp = 0;
+        error = null;
+
+        if (value.ValueKind == JsonValueKind.Number)
+        {
+            if (value.TryGetInt64(out var numeric))
+            {
+                timestamp = numeric;
+                return true;
             }
 
-            current = next;
+            if (value.TryGetDouble(out var floating))
+            {
+                return TryParseNumericTimestamp(floating, out timestamp, out error);
+            }
         }
 
-        if (current.ValueKind == JsonValueKind.Number && current.TryGetInt64(out var numeric))
+        if (value.ValueKind == JsonValueKind.String)
         {
-            timestamp = numeric;
-            return true;
+            return TryParseStringTimestamp(value.GetString(), out timestamp, out error);
         }
 
-        if (current.ValueKind == JsonValueKind.String && DateTimeOffset.TryParse(current.GetString(), out var parsed))
+        return FailTimestampParse("TIMESTAMP BY value must be an integer/long or ISO 8601 string.", out error);
+    }
+
+    private static bool TryParseNumericTimestamp(double numeric, out long timestamp, out string? error)
+    {
+        timestamp = 0;
+        error = null;
+
+        if (Math.Abs(numeric % 1) > double.Epsilon)
+        {
+            return FailTimestampParse("TIMESTAMP BY numeric values must be integers.", out error);
+        }
+
+        timestamp = Convert.ToInt64(numeric);
+        return true;
+    }
+
+    private static bool TryParseStringTimestamp(string? value, out long timestamp, out string? error)
+    {
+        timestamp = 0;
+        error = null;
+
+        if (!string.IsNullOrWhiteSpace(value) && DateTimeOffset.TryParse(value, out var parsed))
         {
             timestamp = parsed.ToUnixTimeMilliseconds();
             return true;
         }
 
+        return FailTimestampParse($"TIMESTAMP BY value '{value}' is not a valid ISO 8601 timestamp.", out error);
+    }
+
+    private static bool FailTimestampParse(string message, out string? error)
+    {
+        error = message;
         return false;
     }
 

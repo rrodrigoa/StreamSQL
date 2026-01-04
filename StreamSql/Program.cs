@@ -30,15 +30,9 @@ public static class Program
 
         var engine = new ChronosQLEngine(new EngineExecutionOptions
         {
-            TimestampField = options.EventTimeField ?? "timestamp",
             Follow = options.Follow
         });
         var plan = engine.Parse(sqlText);
-        if (plan.Window is not null && string.IsNullOrWhiteSpace(options.EventTimeField))
-        {
-            Console.Error.WriteLine("Windowed queries require --timestamp-by to specify event time.");
-            return 1;
-        }
         using var shutdown = new CancellationTokenSource();
         var stopRequested = false;
 

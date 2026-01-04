@@ -28,16 +28,4 @@ public class CommandLineOptionsTests
         Assert.False(success);
         Assert.Equal("--follow can only be used with --file.", error);
     }
-
-    [Fact]
-    public void ParsesTimestampBy()
-    {
-        var args = new[] { "--timestamp-by", "eventTime", "--query", "SELECT COUNT(*) FROM input" };
-
-        var success = CommandLineOptions.TryParse(args, out var options, out var error);
-
-        Assert.True(success, error);
-        Assert.NotNull(options);
-        Assert.Equal("eventTime", options!.EventTimeField);
-    }
 }

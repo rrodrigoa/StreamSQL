@@ -29,7 +29,6 @@ public sealed class ChronosQLEngine
         CancellationToken cancellationToken = default)
     {
         var pipeline = new TrillPipelineBuilder(
-            Options.TimestampField,
             Options.Follow,
             plan);
 
@@ -122,7 +121,6 @@ public sealed class ChronosQLEngine
     public StreamingQuery CreateStreamingQuery(SqlPlan plan)
     {
         var pipeline = new TrillPipelineBuilder(
-            Options.TimestampField,
             Options.Follow,
             plan);
 

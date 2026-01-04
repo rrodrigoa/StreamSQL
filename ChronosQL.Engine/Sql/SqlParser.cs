@@ -31,6 +31,7 @@ public static class SqlParser
             sql,
             visitor.InputStream,
             visitor.OutputStream,
+            visitor.TimestampBy,
             visitor.SelectItems,
             visitor.GroupBy,
             visitor.Window,
@@ -46,6 +47,7 @@ public static class SqlParser
         public List<string> Unsupported { get; } = new();
         public string? InputStream { get; private set; }
         public string? OutputStream { get; private set; }
+        public TimestampByDefinition? TimestampBy { get; private set; }
         public List<SelectItem> SelectItems { get; } = new();
         public List<FieldReference> GroupBy { get; } = new();
         public WindowDefinition? Window { get; private set; }
@@ -119,6 +121,22 @@ public static class SqlParser
                 }
 
                 Unsupported.Add("SELECT expression");
+            }
+
+            if (TryGetTimestampByExpression(node, out var timestampExpression))
+            {
+                if (TimestampBy is not null)
+                {
+                    Unsupported.Add("Only one TIMESTAMP BY clause is supported.");
+                }
+                else if (!TryBuildTimestampBy(timestampExpression, InputStream, out var timestampBy, out var error))
+                {
+                    Unsupported.Add(error ?? "TIMESTAMP BY expression");
+                }
+                else
+                {
+                    TimestampBy = timestampBy;
+                }
             }
 
             if (node.WhereClause is not null)
@@ -284,6 +302,75 @@ public static class SqlParser
 
             fieldReference = new FieldReference(identifiers);
             return true;
+        }
+
+        private static bool TryGetTimestampByExpression(QuerySpecification node, out ScalarExpression expression)
+        {
+            expression = null!;
+
+            var clauseProperty = node.GetType().GetProperty("TimestampByClause");
+            if (clauseProperty?.GetValue(node) is not object clause)
+            {
+                return false;
+            }
+
+            var expressionProperty = clause.GetType().GetProperty("TimestampExpression")
+                                     ?? clause.GetType().GetProperty("Expression");
+            if (expressionProperty?.GetValue(clause) is ScalarExpression scalarExpression)
+            {
+                expression = scalarExpression;
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryBuildTimestampBy(
+            ScalarExpression expression,
+            string? inputStream,
+            out TimestampByDefinition? timestampBy,
+            out string? error)
+        {
+            timestampBy = null;
+            error = null;
+
+            var unwrapped = UnwrapParentheses(expression);
+            if (unwrapped is ColumnReferenceExpression column)
+            {
+                if (!TryBuildFieldReference(column, inputStream, out var fieldReference, out error))
+                {
+                    return false;
+                }
+
+                timestampBy = new TimestampByDefinition(new TimestampFieldExpression(fieldReference));
+                return true;
+            }
+
+            if (TryGetLiteral(unwrapped, out var literal))
+            {
+                if (literal.Kind == FilterValueKind.Null)
+                {
+                    error = "TIMESTAMP BY does not support NULL.";
+                    return false;
+                }
+
+                timestampBy = new TimestampByDefinition(new TimestampLiteralExpression(literal));
+                return true;
+            }
+
+            error = "TIMESTAMP BY expression";
+            return false;
+        }
+
+        private static ScalarExpression UnwrapParentheses(ScalarExpression expression)
+        {
+            var current = expression;
+            while (current is ParenthesisExpression parenthesis)
+            {
+                current = parenthesis.Expression;
+            }
+
+            return current;
         }
 
         private bool TryBuildOrderBy(ExpressionWithSortOrder element, out OrderByDefinition orderBy, out string? error)
