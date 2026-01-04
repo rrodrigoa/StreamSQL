@@ -5,6 +5,18 @@ namespace StreamSql.Tests;
 
 public class SqlSyntaxTests
 {
+    [Fact]
+    public void ParsesMultiSelectScriptInOrder()
+    {
+        var sql = "SELECT data.value FROM first INTO out1; SELECT data.value FROM second INTO out2;";
+
+        var scriptPlan = SqlParser.ParseScript(sql);
+
+        Assert.Equal(2, scriptPlan.Statements.Count);
+        Assert.Equal("first", scriptPlan.Statements[0].InputStream);
+        Assert.Equal("second", scriptPlan.Statements[1].InputStream);
+    }
+
     [Theory]
     [MemberData(nameof(ParserCases))]
     public void ParsesSupportedSql(string name, string sql)

@@ -6,7 +6,7 @@ namespace ChronosQL.Engine.Sql;
 
 public static class SqlParser
 {
-    public static SqlPlan Parse(string sql)
+    public static SqlScriptPlan ParseScript(string sql)
     {
         var normalizedSql = Regex.Replace(sql, @"COUNT\s*\(\s*\)", "COUNT(*)", RegexOptions.IgnoreCase);
         var parser = new TSql170Parser(false);
@@ -18,17 +18,81 @@ public static class SqlParser
             throw new InvalidOperationException($"SQL parse error:{Environment.NewLine}{message}");
         }
 
-        var visitor = new SqlValidationVisitor();
-        fragment.Accept(visitor);
-
-        if (visitor.Unsupported.Count > 0)
+        var statements = ExtractStatements(fragment).ToList();
+        if (statements.Count == 0)
         {
-            var details = string.Join(", ", visitor.Unsupported);
-            throw new InvalidOperationException($"Unsupported SQL syntax detected: {details}");
+            throw new InvalidOperationException("SQL script does not contain any statements.");
         }
 
+        var plans = new List<SqlPlan>(statements.Count);
+        foreach (var statement in statements)
+        {
+            if (statement is not SelectStatement selectStatement)
+            {
+                throw new InvalidOperationException("Only SELECT statements are supported.");
+            }
+
+            var visitor = new SqlValidationVisitor();
+            selectStatement.Accept(visitor);
+
+            if (visitor.Unsupported.Count > 0)
+            {
+                var details = string.Join(", ", visitor.Unsupported);
+                throw new InvalidOperationException($"Unsupported SQL syntax detected: {details}");
+            }
+
+            plans.Add(BuildPlan(selectStatement.ToString(), visitor));
+        }
+
+        return new SqlScriptPlan(sql, plans);
+    }
+
+    public static SqlPlan Parse(string sql)
+    {
+        var scriptPlan = ParseScript(sql);
+        if (scriptPlan.Statements.Count != 1)
+        {
+            throw new InvalidOperationException("SQL script must contain exactly one SELECT statement.");
+        }
+
+        return scriptPlan.Statements[0];
+    }
+
+    private static IEnumerable<TSqlStatement> ExtractStatements(TSqlFragment fragment)
+    {
+        if (fragment is TSqlScript script)
+        {
+            foreach (var batch in script.Batches)
+            {
+                foreach (var statement in batch.Statements)
+                {
+                    yield return statement;
+                }
+            }
+
+            yield break;
+        }
+
+        if (fragment is TSqlBatch batchFragment)
+        {
+            foreach (var statement in batchFragment.Statements)
+            {
+                yield return statement;
+            }
+
+            yield break;
+        }
+
+        if (fragment is TSqlStatement statementFragment)
+        {
+            yield return statementFragment;
+        }
+    }
+
+    private static SqlPlan BuildPlan(string rawSql, SqlValidationVisitor visitor)
+    {
         return new SqlPlan(
-            sql,
+            rawSql,
             visitor.InputStream,
             visitor.OutputStream,
             visitor.TimestampBy,

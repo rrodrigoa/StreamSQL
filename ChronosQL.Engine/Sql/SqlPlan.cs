@@ -2,6 +2,10 @@ using ChronosQL.Engine;
 
 namespace ChronosQL.Engine.Sql;
 
+public sealed record SqlScriptPlan(
+    string RawSql,
+    IReadOnlyList<SqlPlan> Statements);
+
 public sealed record SqlPlan(
     string RawSql,
     string? InputStream,
