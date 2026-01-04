@@ -34,8 +34,8 @@ public class StreamSqlLevel1Tests
     {
         yield return new EndToEndCase(
             "L1 Tumbling window with multiple fields",
-            "SELECT data.category, data.region, COUNT(*) AS count, SUM(data.value) AS total FROM input GROUP BY TUMBLINGWINDOW(second, 5), data.category, data.region",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT data.category, data.region, COUNT(*) AS count, SUM(data.value) AS total FROM input TIMESTAMP BY ts GROUP BY TUMBLINGWINDOW(second, 5), data.category, data.region",
+            Array.Empty<string>(),
             string.Join('\n', new[]
             {
                 "{\"ts\":1000,\"data\":{\"category\":\"a\",\"region\":\"east\",\"value\":2}}",
@@ -59,8 +59,8 @@ public class StreamSqlLevel1Tests
 
         yield return new EndToEndCase(
             "L1 Hopping window with ordering",
-            "SELECT data.category, COUNT(*) AS count, MAX(data.value) AS maxValue FROM input GROUP BY HOPPINGWINDOW(second, 10, 5), data.category ORDER BY windowStart DESC, count DESC",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT data.category, COUNT(*) AS count, MAX(data.value) AS maxValue FROM input TIMESTAMP BY ts GROUP BY HOPPINGWINDOW(second, 10, 5), data.category ORDER BY windowStart DESC, count DESC",
+            Array.Empty<string>(),
             string.Join('\n', new[]
             {
                 "{\"ts\":0,\"data\":{\"category\":\"a\",\"value\":1}}",
@@ -85,8 +85,8 @@ public class StreamSqlLevel1Tests
 
         yield return new EndToEndCase(
             "L1 Sliding window with complex grouping",
-            "SELECT data.category, data.region, COUNT(*) AS count, SUM(data.value) AS total FROM input GROUP BY SLIDINGWINDOW(second, 5), data.category, data.region ORDER BY windowEnd ASC, category ASC",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT data.category, data.region, COUNT(*) AS count, SUM(data.value) AS total FROM input TIMESTAMP BY ts GROUP BY SLIDINGWINDOW(second, 5), data.category, data.region ORDER BY windowEnd ASC, category ASC",
+            Array.Empty<string>(),
             string.Join('\n', new[]
             {
                 "{\"ts\":6000,\"data\":{\"category\":\"a\",\"region\":\"east\",\"value\":1}}",
@@ -110,8 +110,8 @@ public class StreamSqlLevel1Tests
 
         yield return new EndToEndCase(
             "L1 Tumbling window with HAVING",
-            "SELECT data.category, COUNT(*) AS count FROM input GROUP BY TUMBLINGWINDOW(second, 5), data.category HAVING COUNT(*) > 1",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT data.category, COUNT(*) AS count FROM input TIMESTAMP BY ts GROUP BY TUMBLINGWINDOW(second, 5), data.category HAVING COUNT(*) > 1",
+            Array.Empty<string>(),
             string.Join('\n', new[]
             {
                 "{\"ts\":1000,\"data\":{\"category\":\"a\"}}",
@@ -129,8 +129,8 @@ public class StreamSqlLevel1Tests
 
         yield return new EndToEndCase(
             "L1 Tumbling window with WHERE (millisecond)",
-            "SELECT COUNT(*) AS count FROM input WHERE data.value > 2 GROUP BY TUMBLINGWINDOW(millisecond, 500)",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT COUNT(*) AS count FROM input TIMESTAMP BY ts WHERE data.value > 2 GROUP BY TUMBLINGWINDOW(millisecond, 500)",
+            Array.Empty<string>(),
             string.Join('\n', new[]
             {
                 "{\"ts\":100,\"data\":{\"value\":1}}",
@@ -146,8 +146,8 @@ public class StreamSqlLevel1Tests
 
         yield return new EndToEndCase(
             "L1 Tumbling window aggregates (minute)",
-            "SELECT AVG(data.value) AS avg, MIN(data.value) AS minValue, MAX(data.value) AS maxValue FROM input GROUP BY TUMBLINGWINDOW(minute, 1)",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT AVG(data.value) AS avg, MIN(data.value) AS minValue, MAX(data.value) AS maxValue FROM input TIMESTAMP BY ts GROUP BY TUMBLINGWINDOW(minute, 1)",
+            Array.Empty<string>(),
             string.Join('\n', new[]
             {
                 "{\"ts\":1000,\"data\":{\"value\":1}}",
@@ -162,8 +162,8 @@ public class StreamSqlLevel1Tests
 
         yield return new EndToEndCase(
             "L1 Hopping window out-of-order timestamps (millisecond)",
-            "SELECT COUNT(*) AS count FROM input GROUP BY HOPPINGWINDOW(millisecond, 1000, 500)",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT COUNT(*) AS count FROM input TIMESTAMP BY ts GROUP BY HOPPINGWINDOW(millisecond, 1000, 500)",
+            Array.Empty<string>(),
             string.Join('\n', new[]
             {
                 "{\"ts\":1200}",
@@ -180,8 +180,8 @@ public class StreamSqlLevel1Tests
 
         yield return new EndToEndCase(
             "L1 Hopping window single event (minute)",
-            "SELECT COUNT(*) AS count FROM input GROUP BY HOPPINGWINDOW(minute, 2, 1)",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT COUNT(*) AS count FROM input TIMESTAMP BY ts GROUP BY HOPPINGWINDOW(minute, 2, 1)",
+            Array.Empty<string>(),
             "{\"ts\":65000}\n",
             new[]
             {
@@ -192,16 +192,16 @@ public class StreamSqlLevel1Tests
 
         yield return new EndToEndCase(
             "L1 Sliding window empty input (millisecond)",
-            "SELECT COUNT(*) AS count FROM input GROUP BY SLIDINGWINDOW(millisecond, 500)",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT COUNT(*) AS count FROM input TIMESTAMP BY ts GROUP BY SLIDINGWINDOW(millisecond, 500)",
+            Array.Empty<string>(),
             string.Empty,
             Array.Empty<string>(),
             "Validate sliding windows handle empty input.");
 
         yield return new EndToEndCase(
             "L1 Sliding window mixed timestamps (minute)",
-            "SELECT COUNT(*) AS count FROM input GROUP BY SLIDINGWINDOW(minute, 1)",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT COUNT(*) AS count FROM input TIMESTAMP BY ts GROUP BY SLIDINGWINDOW(minute, 1)",
+            Array.Empty<string>(),
             string.Join('\n', new[]
             {
                 "{\"ts\":65000}",

@@ -6,6 +6,7 @@ public sealed record SqlPlan(
     string RawSql,
     string? InputStream,
     string? OutputStream,
+    TimestampByDefinition? TimestampBy,
     IReadOnlyList<SelectItem> SelectItems,
     IReadOnlyList<FieldReference> GroupBy,
     WindowDefinition? Window,
@@ -23,6 +24,14 @@ public enum SelectItemKind
 }
 
 public sealed record FieldReference(IReadOnlyList<string> PathSegments);
+
+public sealed record TimestampByDefinition(TimestampExpression Expression);
+
+public abstract record TimestampExpression;
+
+public sealed record TimestampFieldExpression(FieldReference Field) : TimestampExpression;
+
+public sealed record TimestampLiteralExpression(FilterValue Value) : TimestampExpression;
 
 public sealed record AggregateDefinition(AggregateType Type, FieldReference? Field, string OutputName, bool CountAll);
 

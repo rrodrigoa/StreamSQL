@@ -50,7 +50,7 @@ public class StreamSqlEndToEndTests
             "A0 TIMESTAMP BY",
             "SELECT data.value FROM input TIMESTAMP BY input.ts",
             Array.Empty<string>(),
-            "{\"data\":{\"value\":1}}\n{\"data\":{\"value\":2}}\n",
+            "{\"ts\":1000,\"data\":{\"value\":1}}\n{\"ts\":2000,\"data\":{\"value\":2}}\n",
             new[] { "{\"value\":1}", "{\"value\":2}" },
             "Project a single JSON field.");
 
@@ -275,32 +275,32 @@ public class StreamSqlEndToEndTests
 
         yield return new EndToEndCase(
             "C26 Tumbling window COUNT (second)",
-            "SELECT COUNT(*) FROM input GROUP BY TUMBLINGWINDOW(second, 5)",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT COUNT(*) FROM input TIMESTAMP BY ts GROUP BY TUMBLINGWINDOW(second, 5)",
+            Array.Empty<string>(),
             "{\"ts\":1000}\n{\"ts\":2000}\n{\"ts\":6000}\n",
             new[] { "{\"windowStart\":0,\"windowEnd\":5000,\"count\":2}", "{\"windowStart\":5000,\"windowEnd\":10000,\"count\":1}" },
             "Tumbling window count.");
 
         yield return new EndToEndCase(
             "C27 Tumbling window AVG (minute)",
-            "SELECT AVG(data.value) FROM input GROUP BY TUMBLINGWINDOW(minute, 1)",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT AVG(data.value) FROM input TIMESTAMP BY ts GROUP BY TUMBLINGWINDOW(minute, 1)",
+            Array.Empty<string>(),
             "{\"ts\":1000,\"data\":{\"value\":2}}\n{\"ts\":2000,\"data\":{\"value\":4}}\n{\"ts\":6000,\"data\":{\"value\":10}}\n",
             new[] { "{\"windowStart\":0,\"windowEnd\":60000,\"avg\":5.333333333333333}" },
             "Tumbling window average.");
 
         yield return new EndToEndCase(
             "C28 Hopping window (second)",
-            "SELECT COUNT(*) FROM input GROUP BY HOPPINGWINDOW(second, 10, 5)",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT COUNT(*) FROM input TIMESTAMP BY ts GROUP BY HOPPINGWINDOW(second, 10, 5)",
+            Array.Empty<string>(),
             "{\"ts\":1000}\n{\"ts\":6000}\n{\"ts\":12000}\n",
             new[] { "{\"windowStart\":0,\"windowEnd\":10000,\"count\":2}", "{\"windowStart\":5000,\"windowEnd\":15000,\"count\":2}", "{\"windowStart\":10000,\"windowEnd\":20000,\"count\":1}" },
             "Hopping window count.");
 
         yield return new EndToEndCase(
             "C29 Hopping window (minute)",
-            "SELECT COUNT(*) FROM input GROUP BY HOPPINGWINDOW(minute, 2, 1)",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT COUNT(*) FROM input TIMESTAMP BY ts GROUP BY HOPPINGWINDOW(minute, 2, 1)",
+            Array.Empty<string>(),
             "{\"ts\":1000}\n{\"ts\":65000}\n{\"ts\":130000}\n",
             new[]
             {
@@ -312,72 +312,72 @@ public class StreamSqlEndToEndTests
 
         yield return new EndToEndCase(
             "C30 Sliding window (second)",
-            "SELECT COUNT(*) FROM input GROUP BY SLIDINGWINDOW(second, 5)",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT COUNT(*) FROM input TIMESTAMP BY ts GROUP BY SLIDINGWINDOW(second, 5)",
+            Array.Empty<string>(),
             "{\"ts\":6000}\n",
             new[] { "{\"windowStart\":1000,\"windowEnd\":6000,\"count\":1}" },
             "Sliding window count.");
 
         yield return new EndToEndCase(
             "C31 Sliding window (minute)",
-            "SELECT COUNT(*) FROM input GROUP BY SLIDINGWINDOW(minute, 1)",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT COUNT(*) FROM input TIMESTAMP BY ts GROUP BY SLIDINGWINDOW(minute, 1)",
+            Array.Empty<string>(),
             "{\"ts\":65000}\n",
             new[] { "{\"windowStart\":5000,\"windowEnd\":65000,\"count\":1}" },
             "Sliding window count with minute units.");
 
         yield return new EndToEndCase(
             "C32 Window with WHERE",
-            "SELECT COUNT(*) FROM input WHERE data.value > 5 GROUP BY TUMBLINGWINDOW(second, 5)",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT COUNT(*) FROM input TIMESTAMP BY ts WHERE data.value > 5 GROUP BY TUMBLINGWINDOW(second, 5)",
+            Array.Empty<string>(),
             "{\"ts\":1000,\"data\":{\"value\":3}}\n{\"ts\":2000,\"data\":{\"value\":6}}\n{\"ts\":3000,\"data\":{\"value\":7}}\n",
             new[] { "{\"windowStart\":0,\"windowEnd\":5000,\"count\":2}" },
             "Windowed filter.");
 
         yield return new EndToEndCase(
             "C33 Window with GROUP BY",
-            "SELECT data.category, COUNT(*) FROM input GROUP BY TUMBLINGWINDOW(second, 5), data.category",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT data.category, COUNT(*) FROM input TIMESTAMP BY ts GROUP BY TUMBLINGWINDOW(second, 5), data.category",
+            Array.Empty<string>(),
             "{\"ts\":1000,\"data\":{\"category\":\"a\"}}\n{\"ts\":2000,\"data\":{\"category\":\"b\"}}\n{\"ts\":4000,\"data\":{\"category\":\"a\"}}\n",
             new[] { "{\"windowStart\":0,\"windowEnd\":5000,\"category\":\"a\",\"count\":2}", "{\"windowStart\":0,\"windowEnd\":5000,\"category\":\"b\",\"count\":1}" },
             "Windowed group by.");
 
         yield return new EndToEndCase(
             "C34 Window with no events",
-            "SELECT COUNT(*) FROM input GROUP BY TUMBLINGWINDOW(second, 5)",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT COUNT(*) FROM input TIMESTAMP BY ts GROUP BY TUMBLINGWINDOW(second, 5)",
+            Array.Empty<string>(),
             string.Empty,
             Array.Empty<string>(),
             "No window output when no events.");
 
         yield return new EndToEndCase(
             "C35 Window with exactly one event",
-            "SELECT COUNT(*) FROM input GROUP BY TUMBLINGWINDOW(second, 5)",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT COUNT(*) FROM input TIMESTAMP BY ts GROUP BY TUMBLINGWINDOW(second, 5)",
+            Array.Empty<string>(),
             "{\"ts\":1000}\n",
             new[] { "{\"windowStart\":0,\"windowEnd\":5000,\"count\":1}" },
             "Single event tumbling window.");
 
         yield return new EndToEndCase(
             "C36 Window flush on EOF",
-            "SELECT COUNT(*) FROM input GROUP BY TUMBLINGWINDOW(second, 5)",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT COUNT(*) FROM input TIMESTAMP BY ts GROUP BY TUMBLINGWINDOW(second, 5)",
+            Array.Empty<string>(),
             "{\"ts\":9000}\n{\"ts\":11000}\n",
             new[] { "{\"windowStart\":5000,\"windowEnd\":10000,\"count\":1}", "{\"windowStart\":10000,\"windowEnd\":15000,\"count\":1}" },
             "Flush window on EOF.");
 
         yield return new EndToEndCase(
             "C37 Unordered input",
-            "SELECT COUNT(*) FROM input GROUP BY TUMBLINGWINDOW(second, 5)",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT COUNT(*) FROM input TIMESTAMP BY ts GROUP BY TUMBLINGWINDOW(second, 5)",
+            Array.Empty<string>(),
             "{\"ts\":6000}\n{\"ts\":1000}\n{\"ts\":2000}\n",
             new[] { "{\"windowStart\":0,\"windowEnd\":5000,\"count\":2}", "{\"windowStart\":5000,\"windowEnd\":10000,\"count\":1}" },
             "Arrival order does not impact window results.");
 
         yield return new EndToEndCase(
             "C38 Window with mixed timestamps",
-            "SELECT COUNT(*) FROM input GROUP BY TUMBLINGWINDOW(second, 5)",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT COUNT(*) FROM input TIMESTAMP BY ts GROUP BY TUMBLINGWINDOW(second, 5)",
+            Array.Empty<string>(),
             "{\"ts\":0}\n{\"ts\":\"1970-01-01T00:00:04Z\"}\n",
             new[] { "{\"windowStart\":0,\"windowEnd\":5000,\"count\":2}" },
             "Handles numeric and ISO timestamps.");
@@ -420,8 +420,8 @@ public class StreamSqlEndToEndTests
 
         yield return new EndToEndCase(
             "D39 stdin with window",
-            "SELECT COUNT(*) FROM input GROUP BY TUMBLINGWINDOW(second, 5)",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT COUNT(*) FROM input TIMESTAMP BY ts GROUP BY TUMBLINGWINDOW(second, 5)",
+            Array.Empty<string>(),
             "{\"ts\":1000}\n{\"ts\":2000}\n",
             new[] { "{\"windowStart\":0,\"windowEnd\":5000,\"count\":1}", "{\"windowStart\":0,\"windowEnd\":5000,\"count\":1}" },
             "Windowed stdin stream.",
@@ -429,8 +429,8 @@ public class StreamSqlEndToEndTests
 
         yield return new EndToEndCase(
             "D39-NonSTDIN stdin with window",
-            "SELECT COUNT(*) FROM input GROUP BY TUMBLINGWINDOW(second, 5)",
-            new[] { "--timestamp-by", "ts" },
+            "SELECT COUNT(*) FROM input TIMESTAMP BY ts GROUP BY TUMBLINGWINDOW(second, 5)",
+            Array.Empty<string>(),
             "{\"ts\":1000}\n{\"ts\":2000}\n",
             new[] { "{\"windowStart\":0,\"windowEnd\":5000,\"count\":2}" },
             "Windowed stdin stream.");
@@ -528,14 +528,12 @@ public class StreamSqlEndToEndTests
             ErrorContains: "SQL parse error");
 
         yield return new EndToEndCase(
-            "E47 Window without timestamp by",
-            "SELECT COUNT(*) FROM input GROUP BY TUMBLINGWINDOW(second, 5)",
+            "E47 Missing TIMESTAMP BY",
+            "SELECT data.value FROM input",
             Array.Empty<string>(),
-            "{\"ts\":1000}\n",
-            Array.Empty<string>(),
-            "Windowed queries require timestamp-by.",
-            ExpectError: true,
-            ErrorContains: "Windowed queries require --timestamp-by");
+            "{\"data\":{\"value\":1}}\n",
+            new[] { "{\"value\":1}" },
+            "Queries without TIMESTAMP BY use ingestion time by default.");
 
         yield return new EndToEndCase(
             "E48 Missing field",

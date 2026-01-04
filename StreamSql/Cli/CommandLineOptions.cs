@@ -7,7 +7,6 @@ public sealed class CommandLineOptions
     public string? InputFilePath { get; init; }
     public bool Follow { get; init; }
     public string? OutputFilePath { get; init; }
-    public string? EventTimeField { get; init; }
 
     public static bool TryParse(string[] args, out CommandLineOptions? options, out string? error)
     {
@@ -16,7 +15,7 @@ public sealed class CommandLineOptions
 
         if (args.Length == 0)
         {
-            error = "Usage: streamsql [--query \"SQL\"] [--file path] [--follow] [--out path] [--timestamp-by field] <query.sql>";
+            error = "Usage: streamsql [--query \"SQL\"] [--file path] [--follow] [--out path] <query.sql>";
             return false;
         }
 
@@ -24,7 +23,6 @@ public sealed class CommandLineOptions
         string? queryFilePath = null;
         string? inputFilePath = null;
         string? outputFilePath = null;
-        string? eventTimeField = null;
         var follow = false;
 
         var remaining = new List<string>();
@@ -51,19 +49,6 @@ public sealed class CommandLineOptions
                     {
                         return false;
                     }
-                    break;
-                case "--event-time":
-                case "--timestamp-by":
-                    if (!TryReadValue(args, ref i, out var candidateField, out error))
-                    {
-                        return false;
-                    }
-                    if (!string.IsNullOrWhiteSpace(eventTimeField))
-                    {
-                        error = "Only one of --event-time or --timestamp-by can be specified.";
-                        return false;
-                    }
-                    eventTimeField = candidateField;
                     break;
                 case "--follow":
                     follow = true;
@@ -97,8 +82,7 @@ public sealed class CommandLineOptions
             QueryFilePath = queryFilePath,
             InputFilePath = inputFilePath,
             Follow = follow,
-            OutputFilePath = outputFilePath,
-            EventTimeField = eventTimeField
+            OutputFilePath = outputFilePath
         };
 
         return true;
