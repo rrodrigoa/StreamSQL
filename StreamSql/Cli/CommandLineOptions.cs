@@ -7,6 +7,10 @@ public sealed class CommandLineOptions
     public bool Follow { get; init; }
     public IReadOnlyDictionary<string, InputSource> Inputs { get; init; } = new Dictionary<string, InputSource>(StringComparer.OrdinalIgnoreCase);
     public IReadOnlyDictionary<string, OutputDestination> Outputs { get; init; } = new Dictionary<string, OutputDestination>(StringComparer.OrdinalIgnoreCase);
+    public IReadOnlySet<string> ExplicitInputs { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    public IReadOnlySet<string> ExplicitOutputs { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    public IReadOnlySet<string> ImplicitInputs { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    public IReadOnlySet<string> ImplicitOutputs { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
     public const string DefaultInputName = "input";
     public const string DefaultOutputName = "output";
@@ -27,6 +31,8 @@ public sealed class CommandLineOptions
         var follow = false;
         var inputBindings = new List<InputBinding>();
         var outputBindings = new List<OutputBinding>();
+        var explicitInputs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var explicitOutputs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         var remaining = new List<string>();
 
@@ -47,6 +53,7 @@ public sealed class CommandLineOptions
                         return false;
                     }
                     inputBindings.Add(new InputBinding(DefaultInputName, new InputSource(InputSourceKind.File, inputFilePath)));
+                    explicitInputs.Add(DefaultInputName);
                     break;
                 case "--input":
                     if (!TryReadValue(args, ref i, out var inputValue, out error))
@@ -60,6 +67,7 @@ public sealed class CommandLineOptions
                     }
 
                     inputBindings.Add(new InputBinding(inputName, inputSource));
+                    explicitInputs.Add(inputName);
                     break;
                 case "--out":
                     if (!TryReadValue(args, ref i, out var outputFilePath, out error))
@@ -67,6 +75,7 @@ public sealed class CommandLineOptions
                         return false;
                     }
                     outputBindings.Add(new OutputBinding(DefaultOutputName, new OutputDestination(OutputDestinationKind.File, outputFilePath)));
+                    explicitOutputs.Add(DefaultOutputName);
                     break;
                 case "--output":
                     if (!TryReadValue(args, ref i, out var outputValue, out error))
@@ -80,6 +89,7 @@ public sealed class CommandLineOptions
                     }
 
                     outputBindings.Add(new OutputBinding(outputName, outputDestination));
+                    explicitOutputs.Add(outputName);
                     break;
                 case "--follow":
                     follow = true;
@@ -133,10 +143,30 @@ public sealed class CommandLineOptions
             QueryFilePath = queryFilePath,
             Follow = follow,
             Inputs = inputs,
-            Outputs = outputs
+            Outputs = outputs,
+            ExplicitInputs = explicitInputs,
+            ExplicitOutputs = explicitOutputs,
+            ImplicitInputs = BuildImplicitBindings(inputs.Keys, explicitInputs),
+            ImplicitOutputs = BuildImplicitBindings(outputs.Keys, explicitOutputs)
         };
 
         return true;
+    }
+
+    private static IReadOnlySet<string> BuildImplicitBindings(
+        IEnumerable<string> bindingNames,
+        IReadOnlySet<string> explicitBindings)
+    {
+        var implicitBindings = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in bindingNames)
+        {
+            if (!explicitBindings.Contains(name))
+            {
+                implicitBindings.Add(name);
+            }
+        }
+
+        return implicitBindings;
     }
 
     private static bool TryReadValue(string[] args, ref int index, out string? value, out string? error)
