@@ -136,7 +136,7 @@ public class StreamSqlLevel2Tests
 
             var exitCode = await Program.Main(args);
             Assert.Equal(1, exitCode);
-            Assert.Equal("Multiple SELECT statements require explicit input bindings.", errorWriter.ToString().Trim());
+            Assert.Equal("Only one SELECT may read from stdin.", errorWriter.ToString().Trim());
         }
         finally
         {

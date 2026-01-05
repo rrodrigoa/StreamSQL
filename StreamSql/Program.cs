@@ -137,6 +137,7 @@ public static class Program
     {
         error = null;
         var stdinSelectCount = 0;
+        var usedOutputs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         for (var index = 0; index < scriptPlan.Statements.Count; index++)
         {
@@ -170,6 +171,12 @@ public static class Program
             if (!options.Outputs.ContainsKey(outputName))
             {
                 error = $"SELECT {selectIndex} references unknown output '{outputName}'.";
+                return false;
+            }
+
+            if (!usedOutputs.Add(outputName))
+            {
+                error = $"SELECT {selectIndex} cannot reuse output '{outputName}'.";
                 return false;
             }
         }
