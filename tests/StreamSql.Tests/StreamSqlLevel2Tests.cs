@@ -8,16 +8,15 @@ namespace StreamSql.Tests;
 public class StreamSqlLevel2Tests
 {
     [Fact]
-    public async Task FailsWhenMultipleSelectsWriteToSameOutput()
+    public async Task AllowsMultipleSelectsToWriteToSameOutput()
     {
         var sql = string.Join(Environment.NewLine, new[]
         {
-            "SELECT data.value AS v INTO shared_out FROM first;",
-            "SELECT data.value AS v INTO shared_out FROM second;"
+            "SELECT data.value AS v INTO shared_out FROM input;",
+            "SELECT COUNT(*) AS count INTO shared_out FROM input;"
         });
 
-        var firstInputPath = Path.GetTempFileName();
-        var secondInputPath = Path.GetTempFileName();
+        var inputPath = Path.GetTempFileName();
         var outputPath = Path.GetTempFileName();
 
         var previousError = Console.Error;
@@ -26,27 +25,27 @@ public class StreamSqlLevel2Tests
 
         try
         {
-            await File.WriteAllTextAsync(firstInputPath, "{\"data\":{\"value\":1}}\n");
-            await File.WriteAllTextAsync(secondInputPath, "{\"data\":{\"value\":2}}\n");
+            await File.WriteAllTextAsync(inputPath, "{\"data\":{\"value\":1}}\n{\"data\":{\"value\":2}}\n");
             await File.WriteAllTextAsync(outputPath, string.Empty);
 
             var args = new[]
             {
                 "--query", sql,
-                "--input", $"first={firstInputPath}",
-                "--input", $"second={secondInputPath}",
+                "--input", $"input={inputPath}",
                 "--output", $"shared_out={outputPath}"
             };
 
             var exitCode = await Program.Main(args);
-            Assert.Equal(1, exitCode);
-            Assert.Equal("SELECT 2 cannot reuse output 'shared_out'.", errorWriter.ToString().Trim());
+            Assert.Equal(0, exitCode);
+
+            var output = await File.ReadAllTextAsync(outputPath);
+            var lines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(new[] { "{\"v\":1}", "{\"v\":2}", "{\"count\":2}" }, lines);
         }
         finally
         {
             Console.SetError(previousError);
-            File.Delete(firstInputPath);
-            File.Delete(secondInputPath);
+            File.Delete(inputPath);
             File.Delete(outputPath);
         }
     }
@@ -107,7 +106,7 @@ public class StreamSqlLevel2Tests
     }
 
     [Fact]
-    public async Task FailsWhenMultipleSelectsUseDefaultInputBinding()
+    public async Task ExecutesMultipleSelectsWithDefaultInputBinding()
     {
         var sql = string.Join(Environment.NewLine, new[]
         {
@@ -115,17 +114,22 @@ public class StreamSqlLevel2Tests
             "SELECT data.value AS v INTO second_out FROM input;"
         });
 
+        var input = string.Join('\n', new[]
+        {
+            "{\"data\":{\"value\":1}}",
+            "{\"data\":{\"value\":2}}"
+        }) + "\n";
+
         var outputPath1 = Path.GetTempFileName();
         var outputPath2 = Path.GetTempFileName();
-
-        var previousError = Console.Error;
-        var errorWriter = new StringWriter();
-        Console.SetError(errorWriter);
+        var stdinStream = new MemoryStream(Encoding.UTF8.GetBytes(input));
 
         try
         {
             await File.WriteAllTextAsync(outputPath1, string.Empty);
             await File.WriteAllTextAsync(outputPath2, string.Empty);
+
+            StreamReaderFactory.InputOverride = stdinStream;
 
             var args = new[]
             {
@@ -135,12 +139,20 @@ public class StreamSqlLevel2Tests
             };
 
             var exitCode = await Program.Main(args);
-            Assert.Equal(1, exitCode);
-            Assert.Equal("Only one SELECT may read from stdin.", errorWriter.ToString().Trim());
+            Assert.Equal(0, exitCode);
+
+            var firstOutput = await File.ReadAllTextAsync(outputPath1);
+            var firstLines = firstOutput.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(new[] { "{\"v\":1}", "{\"v\":2}" }, firstLines);
+
+            var secondOutput = await File.ReadAllTextAsync(outputPath2);
+            var secondLines = secondOutput.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(new[] { "{\"v\":1}", "{\"v\":2}" }, secondLines);
         }
         finally
         {
-            Console.SetError(previousError);
+            StreamReaderFactory.InputOverride = null;
+            stdinStream.Dispose();
             File.Delete(outputPath1);
             File.Delete(outputPath2);
         }
