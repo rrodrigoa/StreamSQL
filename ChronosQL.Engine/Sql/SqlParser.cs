@@ -58,6 +58,39 @@ public static class SqlParser
         return scriptPlan.Statements[0];
     }
 
+    public static SqlPlan Parse(SelectStatement selectStatement)
+    {
+        var visitor = new SqlValidationVisitor();
+        selectStatement.Accept(visitor);
+
+        if (visitor.Unsupported.Count > 0)
+        {
+            var details = string.Join(", ", visitor.Unsupported);
+            throw new InvalidOperationException($"Unsupported SQL syntax detected: {details}");
+        }
+
+        return BuildPlan(selectStatement.ToString(), visitor);
+    }
+
+    public static SqlPlan Parse(QueryExpression queryExpression)
+    {
+        if (queryExpression is not QuerySpecification)
+        {
+            throw new InvalidOperationException("Only simple SELECT statements are supported");
+        }
+
+        var visitor = new SqlValidationVisitor();
+        queryExpression.Accept(visitor);
+
+        if (visitor.Unsupported.Count > 0)
+        {
+            var details = string.Join(", ", visitor.Unsupported);
+            throw new InvalidOperationException($"Unsupported SQL syntax detected: {details}");
+        }
+
+        return BuildPlan(queryExpression.ToString(), visitor);
+    }
+
     private static IEnumerable<TSqlStatement> ExtractStatements(TSqlFragment fragment)
     {
         if (fragment is TSqlScript script)
