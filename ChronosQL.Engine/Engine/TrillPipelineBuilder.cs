@@ -165,7 +165,7 @@ public sealed class TrillPipelineBuilder
                 continue;
             }
 
-            var timestamp = ResolveTimestamp(inputEvent.Payload, inputEvent.ArrivalTime);
+            var timestamp = TimestampResolver.ResolveTimestamp(inputEvent.Payload, inputEvent.ArrivalTime, _timestampBy);
             foreach (var windowStart in GetWindowStarts(timestamp, windowSize, slideSize))
             {
                 var windowEnd = windowStart + windowSize;
@@ -206,7 +206,7 @@ public sealed class TrillPipelineBuilder
                 continue;
             }
 
-            var timestamp = ResolveTimestamp(inputEvent.Payload, inputEvent.ArrivalTime);
+            var timestamp = TimestampResolver.ResolveTimestamp(inputEvent.Payload, inputEvent.ArrivalTime, _timestampBy);
             events.Add((timestamp, groupKey, groupValues, inputEvent.Payload));
         }
 

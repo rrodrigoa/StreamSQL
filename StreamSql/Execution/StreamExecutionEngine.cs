@@ -5,6 +5,7 @@ using StreamSql.Output;
 using StreamSql.Planning;
 using System.Threading.Channels;
 using System.Threading;
+using System.Text.Json;
 
 namespace StreamSql.Execution;
 
@@ -24,8 +25,8 @@ public sealed class StreamExecutionEngine
 
     public async Task ExecuteAsync(
         StreamGraphPlan graphPlan,
-        IDictionary<string, InputSource> inputs,
-        IDictionary<string, OutputDestination> outputs,
+        IReadOnlyDictionary<string, InputSource> inputs,
+        IReadOnlyDictionary<string, OutputDestination> outputs,
         CancellationToken cancellationToken)
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -149,7 +150,7 @@ public sealed class StreamExecutionEngine
     private async Task RunSourceAsync(
         SourceNodePlan source,
         NodeRuntime runtime,
-        IDictionary<string, InputSource> inputs,
+        IReadOnlyDictionary<string, InputSource> inputs,
         Func<Stream> stdinFactory,
         CancellationToken cancellationToken)
     {
@@ -301,7 +302,24 @@ public sealed class StreamExecutionEngine
         public Channel<JsonElement>? Output { get; set; }
         public ChannelWriter<JsonElement>? OutputWriter { get; set; }
         public NodeRuntime? OutputOwner { get; set; }
-        public int PendingWriters { get; set; }
+        public int PendingWriters
+        {
+            get
+            {
+                return _pendingWriters;
+            }
+
+            set
+            {
+                _pendingWriters = value;
+            }
+        }
+
+        private int _pendingWriters;
+        public int DecrementPendingWriters()
+        {
+            return Interlocked.Decrement(ref _pendingWriters);
+        }
     }
 
     private static void CompleteOutput(NodeRuntime? outputOwner, Exception? error)
@@ -311,7 +329,7 @@ public sealed class StreamExecutionEngine
             return;
         }
 
-        var remaining = Interlocked.Decrement(ref outputOwner.PendingWriters);
+        var remaining = outputOwner.DecrementPendingWriters();
         if (remaining == 0)
         {
             outputOwner.Output?.Writer.TryComplete(error);

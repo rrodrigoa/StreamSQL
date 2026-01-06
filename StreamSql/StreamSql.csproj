@@ -9,4 +9,10 @@
   <ItemGroup>
     <ProjectReference Include="..\ChronosQL.Engine\ChronosQL.Engine.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Microsoft.SqlServer.TransactSql.ScriptDom">
+      <HintPath>..\SqlScriptDOM\out\Debug\net8.0\Microsoft.SqlServer.TransactSql.ScriptDom.dll</HintPath>
+    </Reference>
+  </ItemGroup>
 </Project>
