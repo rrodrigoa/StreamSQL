@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using StreamSql;
@@ -8,9 +10,255 @@ namespace StreamSql.Tests;
 
 public class StreamSqlEndToEndTests
 {
-    [Theory]
-    [MemberData(nameof(EndToEndCases))]
-    public async Task ExecutesEndToEndCases(EndToEndCase testCase)
+    private static readonly IReadOnlyDictionary<string, EndToEndCase> Cases = BuildCases().ToDictionary(testCase => testCase.Name);
+
+    [Fact]
+    public Task Executes_A0_TimestampBy()
+        => ExecuteCaseAsync(GetCase("A0 TIMESTAMP BY"));
+
+    [Fact]
+    public Task Executes_A1_SingleFieldProjection()
+        => ExecuteCaseAsync(GetCase("A1 Single field projection"));
+
+    [Fact]
+    public Task Executes_A2_ProjectionWithAlias()
+        => ExecuteCaseAsync(GetCase("A2 Projection with alias"));
+
+    [Fact]
+    public Task Executes_A3_MultipleFieldsProjection()
+        => ExecuteCaseAsync(GetCase("A3 Multiple fields projection"));
+
+    [Fact]
+    public Task Executes_A4_MultipleFieldsWithAliases()
+        => ExecuteCaseAsync(GetCase("A4 Multiple fields with aliases"));
+
+    [Fact]
+    public Task Executes_A5_MixedAliasAndNonAlias()
+        => ExecuteCaseAsync(GetCase("A5 Mixed alias and non-alias"));
+
+    [Fact]
+    public Task Executes_A6_SelectRootObject()
+        => ExecuteCaseAsync(GetCase("A6 Select root object"));
+
+    [Fact]
+    public Task Executes_A7_ProjectionWithWhere()
+        => ExecuteCaseAsync(GetCase("A7 Projection with WHERE"));
+
+    [Fact]
+    public Task Executes_A8_ProjectionWithMultipleWhereConditions()
+        => ExecuteCaseAsync(GetCase("A8 Projection with multiple WHERE conditions"));
+
+    [Fact]
+    public Task Executes_B11_Count()
+        => ExecuteCaseAsync(GetCase("B11 COUNT()"));
+
+    [Fact]
+    public Task Executes_B12_CountField()
+        => ExecuteCaseAsync(GetCase("B12 COUNT(field)"));
+
+    [Fact]
+    public Task Executes_B13_AvgField()
+        => ExecuteCaseAsync(GetCase("B13 AVG(field)"));
+
+    [Fact]
+    public Task Executes_B14_MinField()
+        => ExecuteCaseAsync(GetCase("B14 MIN(field)"));
+
+    [Fact]
+    public Task Executes_B15_MaxField()
+        => ExecuteCaseAsync(GetCase("B15 MAX(field)"));
+
+    [Fact]
+    public Task Executes_B16_SumField()
+        => ExecuteCaseAsync(GetCase("B16 SUM(field)"));
+
+    [Fact]
+    public Task Executes_B17_MultipleAggregates()
+        => ExecuteCaseAsync(GetCase("B17 Multiple aggregates"));
+
+    [Fact]
+    public Task Executes_B18_AggregatesWithAliases()
+        => ExecuteCaseAsync(GetCase("B18 Aggregates with aliases"));
+
+    [Fact]
+    public Task Executes_B19_AggregateWithWhere()
+        => ExecuteCaseAsync(GetCase("B19 Aggregate with WHERE"));
+
+    [Fact]
+    public Task Executes_B20_AggregateOverEmptyInput_Stdin()
+        => ExecuteCaseAsync(GetCase("B20 Aggregate over empty input"));
+
+    [Fact]
+    public Task Executes_B20_NonStdin_AggregateOverEmptyInput()
+        => ExecuteCaseAsync(GetCase("B20-NonSTDIN Aggregate over empty input"));
+
+    [Fact]
+    public Task Executes_B21_AggregateWithNullValues()
+        => ExecuteCaseAsync(GetCase("B21 Aggregate with null values"));
+
+    [Fact]
+    public Task Executes_B22_MixedNumericTypes()
+        => ExecuteCaseAsync(GetCase("B22 Mixed numeric types"));
+
+    [Fact]
+    public Task Executes_B23_GroupBySingleField()
+        => ExecuteCaseAsync(GetCase("B23 GROUP BY single field"));
+
+    [Fact]
+    public Task Executes_B24_GroupByMultipleFields()
+        => ExecuteCaseAsync(GetCase("B24 GROUP BY multiple fields"));
+
+    [Fact]
+    public Task Executes_B25_GroupByWithAliases()
+        => ExecuteCaseAsync(GetCase("B25 GROUP BY with aliases"));
+
+    [Fact]
+    public Task Executes_B26_HavingFiltersAggregates()
+        => ExecuteCaseAsync(GetCase("B26 HAVING filters aggregates"));
+
+    [Fact]
+    public Task Executes_B27_HavingWithGroupedField()
+        => ExecuteCaseAsync(GetCase("B27 HAVING with grouped field"));
+
+    [Fact]
+    public Task Executes_B28_HavingWithoutAggregate()
+        => ExecuteCaseAsync(GetCase("B28 HAVING without aggregate"));
+
+    [Fact]
+    public Task Executes_C26_TumblingWindowCountSecond()
+        => ExecuteCaseAsync(GetCase("C26 Tumbling window COUNT (second)"));
+
+    [Fact]
+    public Task Executes_C27_TumblingWindowAvgMinute()
+        => ExecuteCaseAsync(GetCase("C27 Tumbling window AVG (minute)"));
+
+    [Fact]
+    public Task Executes_C28_HoppingWindowSecond()
+        => ExecuteCaseAsync(GetCase("C28 Hopping window (second)"));
+
+    [Fact]
+    public Task Executes_C29_HoppingWindowMinute()
+        => ExecuteCaseAsync(GetCase("C29 Hopping window (minute)"));
+
+    [Fact]
+    public Task Executes_C30_SlidingWindowSecond()
+        => ExecuteCaseAsync(GetCase("C30 Sliding window (second)"));
+
+    [Fact]
+    public Task Executes_C31_SlidingWindowMinute()
+        => ExecuteCaseAsync(GetCase("C31 Sliding window (minute)"));
+
+    [Fact]
+    public Task Executes_C32_WindowWithWhere()
+        => ExecuteCaseAsync(GetCase("C32 Window with WHERE"));
+
+    [Fact]
+    public Task Executes_C33_WindowWithGroupBy()
+        => ExecuteCaseAsync(GetCase("C33 Window with GROUP BY"));
+
+    [Fact]
+    public Task Executes_C34_WindowWithNoEvents()
+        => ExecuteCaseAsync(GetCase("C34 Window with no events"));
+
+    [Fact]
+    public Task Executes_C35_WindowWithExactlyOneEvent()
+        => ExecuteCaseAsync(GetCase("C35 Window with exactly one event"));
+
+    [Fact]
+    public Task Executes_C36_WindowFlushOnEof()
+        => ExecuteCaseAsync(GetCase("C36 Window flush on EOF"));
+
+    [Fact]
+    public Task Executes_C37_UnorderedInput()
+        => ExecuteCaseAsync(GetCase("C37 Unordered input"));
+
+    [Fact]
+    public Task Executes_C38_WindowWithMixedTimestamps()
+        => ExecuteCaseAsync(GetCase("C38 Window with mixed timestamps"));
+
+    [Fact]
+    public Task Executes_D36_StdinToStdoutBasicExecution()
+        => ExecuteCaseAsync(GetCase("D36 stdin to stdout basic execution"));
+
+    [Fact]
+    public Task Executes_D37_StdinWithWhereFilter()
+        => ExecuteCaseAsync(GetCase("D37 stdin with WHERE filter"));
+
+    [Fact]
+    public Task Executes_D38_StdinWithAggregation()
+        => ExecuteCaseAsync(GetCase("D38 stdin with aggregation"));
+
+    [Fact]
+    public Task Executes_D38_NonStdin_StdinWithAggregation()
+        => ExecuteCaseAsync(GetCase("D38-NonSTDIN stdin with aggregation"));
+
+    [Fact]
+    public Task Executes_D39_StdinWithWindow()
+        => ExecuteCaseAsync(GetCase("D39 stdin with window"));
+
+    [Fact]
+    public Task Executes_D39_NonStdin_StdinWithWindow()
+        => ExecuteCaseAsync(GetCase("D39-NonSTDIN stdin with window"));
+
+    [Fact]
+    public Task Executes_D40_StdoutJsonLinesFormat()
+        => ExecuteCaseAsync(GetCase("D40 stdout JSON Lines format"));
+
+    [Fact]
+    public Task Executes_D41_StdoutSingleRowAggregate()
+        => ExecuteCaseAsync(GetCase("D41 stdout single-row aggregate"));
+
+    [Fact]
+    public Task Executes_D41_NonStdin_StdoutSingleRowAggregate()
+        => ExecuteCaseAsync(GetCase("D41-NonSTDIN stdout single-row aggregate"));
+
+    [Fact]
+    public Task Executes_D42_EmptyStdin()
+        => ExecuteCaseAsync(GetCase("D42 empty stdin"));
+
+    [Fact]
+    public Task Executes_D43_MalformedJsonLine()
+        => ExecuteCaseAsync(GetCase("D43 malformed JSON line"));
+
+    [Fact]
+    public Task Executes_D43_NonStdin_MalformedJsonLine()
+        => ExecuteCaseAsync(GetCase("D43-NonSTDIN malformed JSON line"));
+
+    [Fact]
+    public Task Executes_D44_LargeStdin()
+        => ExecuteCaseAsync(GetCase("D44 large stdin"));
+
+    [Fact]
+    public Task Executes_D44_NonStdin_LargeStdin()
+        => ExecuteCaseAsync(GetCase("D44-NonSTDIN large stdin"));
+
+    [Fact]
+    public Task Executes_D45_StdinWithAliases()
+        => ExecuteCaseAsync(GetCase("D45 stdin with aliases"));
+
+    [Fact]
+    public Task Executes_E46_InvalidSqlSyntax()
+        => ExecuteCaseAsync(GetCase("E46 Invalid SQL syntax"));
+
+    [Fact]
+    public Task Executes_E47_MissingTimestampBy()
+        => ExecuteCaseAsync(GetCase("E47 Missing TIMESTAMP BY"));
+
+    [Fact]
+    public Task Executes_E48_MissingField()
+        => ExecuteCaseAsync(GetCase("E48 Missing field"));
+
+    [Fact]
+    public Task Executes_E49_InvalidAggregationUsage()
+        => ExecuteCaseAsync(GetCase("E49 Invalid aggregation usage"));
+
+    [Fact]
+    public Task Executes_E50_GroupByMismatch()
+        => ExecuteCaseAsync(GetCase("E50 GROUP BY mismatch"));
+
+    private static EndToEndCase GetCase(string name) => Cases[name];
+
+    private static async Task ExecuteCaseAsync(EndToEndCase testCase)
     {
         if (testCase.ExpectError)
         {
@@ -33,14 +281,6 @@ public class StreamSqlEndToEndTests
                 using var doc = JsonDocument.Parse(line);
                 Assert.True(doc.RootElement.ValueKind is JsonValueKind.Object or JsonValueKind.Array);
             }
-        }
-    }
-
-    public static IEnumerable<object[]> EndToEndCases()
-    {
-        foreach (var testCase in BuildCases())
-        {
-            yield return new object[] { testCase };
         }
     }
 
@@ -508,6 +748,7 @@ public class StreamSqlEndToEndTests
             string.Join('\n', Enumerable.Repeat("{\"data\":{\"value\":1}}", 1000)) + "\n",
             new[] { "{\"count\":1000}" },
             "Performance sanity on large input.");
+
         yield return new EndToEndCase(
             "D45 stdin with aliases",
             "SELECT data.value AS v FROM input",
