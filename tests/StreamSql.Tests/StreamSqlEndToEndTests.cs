@@ -195,7 +195,7 @@ public class StreamSqlEndToEndTests
             "SELECT COUNT(*) FROM input",
             Array.Empty<string>(),
             string.Empty,
-            Array.Empty<string>(),
+            new[] { "{\"count\":0}" },
             "Aggregate even when no input is present.",
             UseStdin: true);
 
