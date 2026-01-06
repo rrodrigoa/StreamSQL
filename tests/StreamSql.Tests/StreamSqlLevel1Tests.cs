@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using StreamSql;
@@ -8,9 +9,51 @@ namespace StreamSql.Tests;
 
 public class StreamSqlLevel1Tests
 {
-    [Theory]
-    [MemberData(nameof(Level1Cases))]
-    public async Task ExecutesLevel1Cases(EndToEndCase testCase)
+    private static readonly IReadOnlyDictionary<string, EndToEndCase> Cases = BuildCases().ToDictionary(testCase => testCase.Name);
+
+    [Fact]
+    public Task Executes_L1_TumblingWindowWithMultipleFields()
+        => ExecuteCaseAsync(GetCase("L1 Tumbling window with multiple fields"));
+
+    [Fact]
+    public Task Executes_L1_HoppingWindowWithOrdering()
+        => ExecuteCaseAsync(GetCase("L1 Hopping window with ordering"));
+
+    [Fact]
+    public Task Executes_L1_SlidingWindowWithComplexGrouping()
+        => ExecuteCaseAsync(GetCase("L1 Sliding window with complex grouping"));
+
+    [Fact]
+    public Task Executes_L1_TumblingWindowWithHaving()
+        => ExecuteCaseAsync(GetCase("L1 Tumbling window with HAVING"));
+
+    [Fact]
+    public Task Executes_L1_TumblingWindowWithWhereMillisecond()
+        => ExecuteCaseAsync(GetCase("L1 Tumbling window with WHERE (millisecond)"));
+
+    [Fact]
+    public Task Executes_L1_TumblingWindowAggregatesMinute()
+        => ExecuteCaseAsync(GetCase("L1 Tumbling window aggregates (minute)"));
+
+    [Fact]
+    public Task Executes_L1_HoppingWindowOutOfOrderTimestampsMillisecond()
+        => ExecuteCaseAsync(GetCase("L1 Hopping window out-of-order timestamps (millisecond)"));
+
+    [Fact]
+    public Task Executes_L1_HoppingWindowSingleEventMinute()
+        => ExecuteCaseAsync(GetCase("L1 Hopping window single event (minute)"));
+
+    [Fact]
+    public Task Executes_L1_SlidingWindowEmptyInputMillisecond()
+        => ExecuteCaseAsync(GetCase("L1 Sliding window empty input (millisecond)"));
+
+    [Fact]
+    public Task Executes_L1_SlidingWindowMixedTimestampsMinute()
+        => ExecuteCaseAsync(GetCase("L1 Sliding window mixed timestamps (minute)"));
+
+    private static EndToEndCase GetCase(string name) => Cases[name];
+
+    private static async Task ExecuteCaseAsync(EndToEndCase testCase)
     {
         var lines = await ExecuteAsync(testCase);
         Assert.Equal(testCase.ExpectedOutput, lines);
@@ -19,14 +62,6 @@ public class StreamSqlLevel1Tests
         {
             using var doc = JsonDocument.Parse(line);
             Assert.True(doc.RootElement.ValueKind is JsonValueKind.Object or JsonValueKind.Array);
-        }
-    }
-
-    public static IEnumerable<object[]> Level1Cases()
-    {
-        foreach (var testCase in BuildCases())
-        {
-            yield return new object[] { testCase };
         }
     }
 
