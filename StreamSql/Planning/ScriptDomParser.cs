@@ -35,7 +35,7 @@ public static class ScriptDomParser
                 throw new InvalidOperationException("Only SELECT statements are supported.");
             }
 
-            var selectPlan = SqlParser.Parse(selectStatement.ToString());
+            var selectPlan = SqlParser.Parse(selectStatement);
             selectPlans.Add(new SelectPlanDefinition(i + 1, selectPlan));
 
             if (selectStatement.WithCtesAndXmlNamespaces?.CommonTableExpressions is null)
@@ -46,7 +46,7 @@ public static class ScriptDomParser
             foreach (var cte in selectStatement.WithCtesAndXmlNamespaces.CommonTableExpressions)
             {
                 var alias = cte.ExpressionName?.Value ?? string.Empty;
-                var ctePlan = SqlParser.Parse(cte.QueryExpression.ToString());
+                var ctePlan = SqlParser.Parse(cte.QueryExpression);
                 withDefinitions.Add(new WithDefinition(alias, ctePlan));
             }
         }
