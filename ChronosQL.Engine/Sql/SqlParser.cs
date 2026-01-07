@@ -61,7 +61,17 @@ public static class SqlParser
     public static SqlPlan Parse(SelectStatement selectStatement)
     {
         var visitor = new SqlValidationVisitor();
-        selectStatement.Accept(visitor);
+        if (selectStatement.QueryExpression is null)
+        {
+            throw new InvalidOperationException("SELECT statement does not contain a query expression.");
+        }
+
+        selectStatement.QueryExpression.Accept(visitor);
+
+        if (selectStatement.Into is not null)
+        {
+            visitor.SetOutputStream(GetSchemaObjectName(selectStatement.Into));
+        }
 
         if (visitor.Unsupported.Count > 0)
         {
@@ -154,6 +164,11 @@ public static class SqlParser
         public List<OrderByDefinition> OrderBy { get; } = new();
         public bool HasAggregate => Aggregates.Count > 0;
         private readonly List<ExpressionWithSortOrder> _pendingOrderBy = new();
+
+        public void SetOutputStream(string? outputStream)
+        {
+            OutputStream = outputStream;
+        }
 
         public override void ExplicitVisit(QuerySpecification node)
         {
