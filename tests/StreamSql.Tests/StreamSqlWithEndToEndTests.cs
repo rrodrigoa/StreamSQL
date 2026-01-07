@@ -607,7 +607,7 @@ public class StreamSqlWithEndToEndTests
             using var reader = new StreamReader(stdoutStream, leaveOpen: true);
             var stdoutText = await reader.ReadToEndAsync();
             var lines = stdoutText.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
-            Assert.Equal(new[] { "{\"v\":9}", "{\"v\":10}", "{\"count\":2}" }, lines);
+            Assert.Equal(new[] {"{\"v\":9}", "{\"v\":10}", "{\"count\":2}" }, lines);
         }
         finally
         {

@@ -40,7 +40,7 @@ public class StreamSqlLevel2Tests
 
             var output = await File.ReadAllTextAsync(outputPath);
             var lines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
-            Assert.Equal(new[] { "{\"v\":1}", "{\"v\":2}", "{\"count\":2}" }, lines);
+            Assert.Equal(new[] { "{\"count\":2}", "{\"v\":1}", "{\"v\":2}" }, lines);
         }
         finally
         {

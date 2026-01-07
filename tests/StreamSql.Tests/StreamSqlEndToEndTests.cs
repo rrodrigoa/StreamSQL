@@ -444,7 +444,7 @@ public class StreamSqlEndToEndTests
             "SELECT COUNT(*) FROM input",
             Array.Empty<string>(),
             string.Empty,
-            Array.Empty<string>(),
+            new[] { "{\"count\":0}" },
             "Aggregate even when no input is present.");
 
         yield return new EndToEndCase(
@@ -646,7 +646,7 @@ public class StreamSqlEndToEndTests
             "SELECT COUNT(*) FROM input",
             Array.Empty<string>(),
             "{\"data\":{\"value\":1}}\n{\"data\":{\"value\":2}}\n",
-            new[] { "{\"count\":1}", "{\"count\":1}" },
+            new[] { "{\"count\":2}" },
             "Aggregate stdin stream.",
             UseStdin: true);
 
@@ -663,7 +663,7 @@ public class StreamSqlEndToEndTests
             "SELECT COUNT(*) FROM input TIMESTAMP BY ts GROUP BY TUMBLINGWINDOW(second, 5)",
             Array.Empty<string>(),
             "{\"ts\":1000}\n{\"ts\":2000}\n",
-            new[] { "{\"windowStart\":0,\"windowEnd\":5000,\"count\":1}", "{\"windowStart\":0,\"windowEnd\":5000,\"count\":1}" },
+            new[] { "{\"windowStart\":0,\"windowEnd\":5000,\"count\":2}"},
             "Windowed stdin stream.",
             UseStdin: true);
 
@@ -690,7 +690,7 @@ public class StreamSqlEndToEndTests
             "SELECT COUNT(*) FROM input",
             Array.Empty<string>(),
             "{\"data\":{\"value\":1}}\n{\"data\":{\"value\":2}}\n",
-            new[] { "{\"count\":1}", "{\"count\":1}" },
+            new[] { "{\"count\":2}"},
             "Aggregate outputs single line.",
             UseStdin: true);
 
@@ -737,7 +737,7 @@ public class StreamSqlEndToEndTests
             "SELECT COUNT(*) FROM input",
             Array.Empty<string>(),
             string.Join('\n', Enumerable.Repeat("{\"data\":{\"value\":1}}", 1000)) + "\n",
-            Enumerable.Repeat("{\"count\":1}", 1000).ToArray(),
+            new[] { "{\"count\":1000}" },
             "Performance sanity on large input.",
             UseStdin: true);
 
