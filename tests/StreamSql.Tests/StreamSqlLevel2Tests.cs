@@ -1,8 +1,10 @@
-using System.Text;
-using System.Linq;
 using StreamSql;
 using StreamSql.Input;
+using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
 using Xunit;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace StreamSql.Tests;
 
@@ -642,7 +644,13 @@ public class StreamSqlLevel2Tests
     [Fact]
     public async Task ExecutesInnerJoinWithNamedInputs()
     {
-        var sql = "SELECT left.data.value AS left_value, right.data.other AS right_value INTO joined_out FROM left_input AS left JOIN right_input AS right ON left.data.id = right.data.id;";
+        var sql = "SELECT" +
+                  "     left_stream.data.value AS left_value," +
+                  "     right_stream.data.other AS right_value" +
+                  " INTO joined_out" +
+                  " FROM left_input AS left_stream" +
+                  "     JOIN right_input AS right_stream" +
+                  "         ON left_stream.data.id = right_stream.data.id;";
 
         var leftPath = Path.GetTempFileName();
         var rightPath = Path.GetTempFileName();
@@ -680,7 +688,13 @@ public class StreamSqlLevel2Tests
     [Fact]
     public async Task ExecutesJoinWithStdin()
     {
-        var sql = "SELECT left.data.value AS left_value, right.data.other AS right_value INTO joined_out FROM stdin_input AS left JOIN file_input AS right ON left.data.id = right.data.id;";
+        var sql = "SELECT " +
+                  "     left_stream.data.value AS left_value," +
+                  "     right_stream.data.other AS right_value" +
+                  " INTO joined_out" +
+                  " FROM stdin_input AS left_stream" +
+                  "     JOIN file_input AS right_stream " +
+                  "         ON left_stream.data.id = right_stream.data.id;";
 
         var filePath = Path.GetTempFileName();
         var outputPath = Path.GetTempFileName();
@@ -724,9 +738,16 @@ public class StreamSqlLevel2Tests
     }
 
     [Fact]
-    public async Task ExecutesJoinWithTimestampBy()
+    public async Task ExecutesJoinWithTimestampByAndDATEDIFF()
     {
-        var sql = "SELECT COUNT(*) AS count INTO joined_out FROM left_input AS left JOIN right_input AS right ON left.id = right.id TIMESTAMP BY left.ts GROUP BY TUMBLINGWINDOW(second, 1);";
+        var sql = " SELECT"+
+                  "     COUNT(*) AS count"+
+                  "     INTO joined_out"+
+                  " FROM left_input  AS l TIMESTAMP BY l.ts"+
+                  " JOIN right_input AS r TIMESTAMP BY r.ts"+
+                  "     ON l.id = r.id"+
+                  "     AND DATEDIFF(second, l, r) BETWEEN 0 AND 1"+
+                  " GROUP BY TUMBLINGWINDOW(second, 1); ";
 
         var leftPath = Path.GetTempFileName();
         var rightPath = Path.GetTempFileName();

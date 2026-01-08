@@ -63,7 +63,7 @@ public static class StreamGraphPlanner
                     return false;
                 }
 
-                outputUsage[outputName] = new OutputUsage(1, hasUnion: true);
+                outputUsage[outputName] = new OutputUsage(1, HasUnion: true);
             }
             else
             {

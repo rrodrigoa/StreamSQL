@@ -153,7 +153,7 @@ public static class SqlParser
             throw new InvalidOperationException("SELECT statement does not contain a query expression.");
         }
 
-        if (selectStatement.OrderByClause is not null &&
+        if (selectStatement.QueryExpression.OrderByClause is not null &&
             selectStatement.QueryExpression is BinaryQueryExpression)
         {
             throw new InvalidOperationException("ORDER BY is not supported with UNION.");
