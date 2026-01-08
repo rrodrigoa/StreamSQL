@@ -613,8 +613,9 @@ public static class SqlParser
                 return false;
             }
 
+            string? temporalError = null;
             if (TryBuildJoinEquality(binary.FirstExpression, leftSource, rightSource, out leftKey, out rightKey, out var equalityError) &&
-                TryBuildTemporalConstraint(binary.SecondExpression, leftSource, rightSource, out temporalConstraint, out var temporalError))
+                TryBuildTemporalConstraint(binary.SecondExpression, leftSource, rightSource, out temporalConstraint, out temporalError))
             {
                 return true;
             }

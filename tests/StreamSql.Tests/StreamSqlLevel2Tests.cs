@@ -756,7 +756,7 @@ public class StreamSqlLevel2Tests
         try
         {
             await File.WriteAllTextAsync(leftPath, "{\"id\":1,\"ts\":1000}\n{\"id\":2,\"ts\":1500}\n");
-            await File.WriteAllTextAsync(rightPath, "{\"id\":1}\n{\"id\":2}\n");
+            await File.WriteAllTextAsync(rightPath, "{\"id\":1,\"ts\":1000}\n{\"id\":2,\"ts\":1500}\n");
             await File.WriteAllTextAsync(outputPath, string.Empty);
 
             var args = new[]
