@@ -13,8 +13,8 @@ public class SqlSyntaxTests
         var scriptPlan = SqlParser.ParseScript(sql);
 
         Assert.Equal(2, scriptPlan.Statements.Count);
-        Assert.Equal("first", scriptPlan.Statements[0].InputStream);
-        Assert.Equal("second", scriptPlan.Statements[1].InputStream);
+        Assert.Equal("first", scriptPlan.Statements[0].Inputs[0].Name);
+        Assert.Equal("second", scriptPlan.Statements[1].Inputs[0].Name);
     }
 
     [Fact]

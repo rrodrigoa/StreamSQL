@@ -40,39 +40,116 @@ public static class StreamGraphPlanner
 
         var sourceNodes = new Dictionary<string, SourceNodePlan>(StringComparer.OrdinalIgnoreCase);
         var selectNodes = new List<SelectNodePlan>();
+        var joinNodes = new List<JoinNodePlan>();
+        var unionNodes = new List<UnionNodePlan>();
         var outputNodes = new Dictionary<string, OutputNodePlan>(StringComparer.OrdinalIgnoreCase);
+        var outputUsage = new Dictionary<string, OutputUsage>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var selectDefinition in scriptPlan.SelectStatements)
         {
             var plan = selectDefinition.Plan;
-            if (string.IsNullOrWhiteSpace(plan.InputStream))
-            {
-                error = $"SELECT {selectDefinition.Index} does not specify an input.";
-                return false;
-            }
-
             var outputName = plan.OutputStream ?? CommandLineOptions.DefaultOutputName;
             if (!options.Outputs.ContainsKey(outputName))
             {
                 error = $"SELECT {selectDefinition.Index} references unknown output '{outputName}'.";
                 return false;
             }
-            selectNodes.Add(new SelectNodePlan(selectDefinition.Index, outputName, plan));
+
+            if (plan.Union is not null)
+            {
+                if (outputUsage.TryGetValue(outputName, out var usage) && usage.TotalCount > 0)
+                {
+                    error = $"SELECT {selectDefinition.Index} cannot share output '{outputName}' with a UNION.";
+                    return false;
+                }
+
+                outputUsage[outputName] = new OutputUsage(1, hasUnion: true);
+            }
+            else
+            {
+                if (outputUsage.TryGetValue(outputName, out var usage) && usage.HasUnion)
+                {
+                    error = $"SELECT {selectDefinition.Index} cannot share output '{outputName}' with a UNION.";
+                    return false;
+                }
+
+                outputUsage[outputName] = usage.Increment();
+            }
+
             if (!outputNodes.ContainsKey(outputName))
             {
                 outputNodes[outputName] = new OutputNodePlan(outputName);
             }
+
+            if (plan.Union is not null)
+            {
+                var unionNode = new UnionNodePlan($"UNION {selectDefinition.Index}", plan.Union.Distinct);
+                unionNodes.Add(unionNode);
+
+                var branchIndex = 0;
+                foreach (var branch in plan.Union.Branches)
+                {
+                    branchIndex++;
+                    if (!TryPlanSelectPipeline(
+                            branch,
+                            selectDefinition.Index,
+                            outputName,
+                            $" (UNION branch {branchIndex})",
+                            withNodes,
+                            sourceNodes,
+                            options,
+                            selectNodes,
+                            joinNodes,
+                            out var branchSelectNode,
+                            out error))
+                    {
+                        return false;
+                    }
+
+                    ConnectNodes(branchSelectNode, unionNode);
+                }
+
+                var outputNode = outputNodes[outputName];
+                ConnectNodes(unionNode, outputNode);
+                continue;
+            }
+
+            if (!TryPlanSelectPipeline(
+                    plan,
+                    selectDefinition.Index,
+                    outputName,
+                    string.Empty,
+                    withNodes,
+                    sourceNodes,
+                    options,
+                    selectNodes,
+                    joinNodes,
+                    out var selectNode,
+                    out error))
+            {
+                return false;
+            }
+
+            var outputForSelect = outputNodes[outputName];
+            ConnectNodes(selectNode, outputForSelect);
         }
 
         foreach (var withNode in withNodes.Values)
         {
-            if (string.IsNullOrWhiteSpace(withNode.Plan.InputStream))
+            if (withNode.Plan.Union is not null || withNode.Plan.Join is not null || withNode.Plan.Inputs.Count != 1)
+            {
+                error = $"WITH '{withNode.Name}' must reference a single input.";
+                return false;
+            }
+
+            var inputName = withNode.Plan.Inputs[0].Name;
+            if (string.IsNullOrWhiteSpace(inputName))
             {
                 error = $"WITH '{withNode.Name}' does not specify an input.";
                 return false;
             }
 
-            if (!TryResolveUpstream(withNode.Plan.InputStream!, withNodes, sourceNodes, options, out var upstream, out error))
+            if (!TryResolveUpstream(inputName, withNodes, sourceNodes, options, out var upstream, out error))
             {
                 error = $"WITH '{withNode.Name}' {error}";
                 return false;
@@ -81,21 +158,10 @@ public static class StreamGraphPlanner
             ConnectNodes(upstream, withNode);
         }
 
-        foreach (var selectNode in selectNodes)
-        {
-            if (!TryResolveUpstream(selectNode.Plan.InputStream!, withNodes, sourceNodes, options, out var upstream, out error))
-            {
-                error = $"SELECT {selectNode.Index} {error}";
-                return false;
-            }
-
-            ConnectNodes(upstream, selectNode);
-            var outputNode = outputNodes[selectNode.OutputName];
-            ConnectNodes(selectNode, outputNode);
-        }
-
         var nodes = sourceNodes.Values.Cast<StreamNodePlan>()
             .Concat(withNodes.Values)
+            .Concat(joinNodes)
+            .Concat(unionNodes)
             .Concat(selectNodes)
             .Concat(outputNodes.Values)
             .ToList();
@@ -114,6 +180,8 @@ public static class StreamGraphPlanner
             nodes,
             sourceNodes.Values.ToList(),
             withNodes.Values.ToList(),
+            joinNodes,
+            unionNodes,
             selectNodes,
             outputNodes.Values.ToList(),
             ordered);
@@ -124,18 +192,29 @@ public static class StreamGraphPlanner
     private static void ConnectNodes(StreamNodePlan upstream, StreamNodePlan downstream)
     {
         upstream.Downstream.Add(downstream);
-        if (downstream is OutputNodePlan outputNode)
-        {
-            outputNode.UpstreamCount++;
-            return;
-        }
+        downstream.Upstreams.Add(upstream);
 
-        if (downstream.Upstream is not null)
+        switch (downstream)
         {
-            throw new InvalidOperationException($"Node '{downstream.Name}' has multiple upstream sources.");
+            case OutputNodePlan outputNode:
+                outputNode.UpstreamCount++;
+                return;
+            case UnionNodePlan unionNode:
+                unionNode.UpstreamCount++;
+                return;
+            case JoinNodePlan:
+                if (downstream.Upstreams.Count > 2)
+                {
+                    throw new InvalidOperationException($"Node '{downstream.Name}' has too many upstream sources.");
+                }
+                return;
+            default:
+                if (downstream.Upstreams.Count > 1)
+                {
+                    throw new InvalidOperationException($"Node '{downstream.Name}' has multiple upstream sources.");
+                }
+                return;
         }
-
-        downstream.Upstream = upstream;
     }
 
     private static bool TryResolveUpstream(
@@ -169,6 +248,77 @@ public static class StreamGraphPlanner
 
         error = $"references unknown input '{name}'.";
         return false;
+    }
+
+    private static bool TryPlanSelectPipeline(
+        SqlPlan plan,
+        int selectIndex,
+        string outputName,
+        string labelSuffix,
+        IReadOnlyDictionary<string, WithNodePlan> withNodes,
+        IDictionary<string, SourceNodePlan> sourceNodes,
+        CommandLineOptions options,
+        List<SelectNodePlan> selectNodes,
+        List<JoinNodePlan> joinNodes,
+        out SelectNodePlan selectNode,
+        out string? error)
+    {
+        error = null;
+        selectNode = null!;
+
+        if (plan.Union is not null)
+        {
+            error = $"SELECT {selectIndex}{labelSuffix} cannot contain nested UNION.";
+            return false;
+        }
+
+        StreamNodePlan upstream;
+        if (plan.Join is not null)
+        {
+            var joinNode = new JoinNodePlan($"JOIN {selectIndex}{labelSuffix}", plan.Join);
+            joinNodes.Add(joinNode);
+
+            if (!TryResolveUpstream(plan.Join.LeftSource.Name, withNodes, sourceNodes, options, out var leftUpstream, out error))
+            {
+                error = $"SELECT {selectIndex}{labelSuffix} {error}";
+                return false;
+            }
+
+            if (!TryResolveUpstream(plan.Join.RightSource.Name, withNodes, sourceNodes, options, out var rightUpstream, out error))
+            {
+                error = $"SELECT {selectIndex}{labelSuffix} {error}";
+                return false;
+            }
+
+            ConnectNodes(leftUpstream, joinNode);
+            ConnectNodes(rightUpstream, joinNode);
+            upstream = joinNode;
+        }
+        else
+        {
+            if (plan.Inputs.Count == 0)
+            {
+                error = $"SELECT {selectIndex}{labelSuffix} does not specify an input.";
+                return false;
+            }
+
+            if (plan.Inputs.Count > 1)
+            {
+                error = $"SELECT {selectIndex}{labelSuffix} references multiple inputs without JOIN.";
+                return false;
+            }
+
+            if (!TryResolveUpstream(plan.Inputs[0].Name, withNodes, sourceNodes, options, out upstream, out error))
+            {
+                error = $"SELECT {selectIndex}{labelSuffix} {error}";
+                return false;
+            }
+        }
+
+        selectNode = new SelectNodePlan(selectIndex, outputName, plan);
+        selectNodes.Add(selectNode);
+        ConnectNodes(upstream, selectNode);
+        return true;
     }
 
     private static SourceNodePlan GetSourceNode(
@@ -250,6 +400,12 @@ public static class StreamGraphPlanner
                         return false;
                     }
                     break;
+                case JoinNodePlan joinNode:
+                    joinNode.EffectiveTimestamp = null;
+                    break;
+                case UnionNodePlan unionNode:
+                    unionNode.EffectiveTimestamp = null;
+                    break;
                 case SelectNodePlan selectNode:
                     if (!TryApplyTimestamp(selectNode, selectNode.Plan, out error))
                     {
@@ -257,7 +413,9 @@ public static class StreamGraphPlanner
                     }
                     break;
                 case OutputNodePlan outputNode:
-                    outputNode.EffectiveTimestamp = outputNode.Upstream?.EffectiveTimestamp;
+                    outputNode.EffectiveTimestamp = outputNode.Upstreams.Count == 1
+                        ? outputNode.Upstreams[0].EffectiveTimestamp
+                        : null;
                     break;
             }
         }
@@ -269,7 +427,7 @@ public static class StreamGraphPlanner
     {
         error = null;
 
-        var upstream = node.Upstream;
+        var upstream = node.Upstreams.Count == 1 ? node.Upstreams[0] : null;
         var upstreamTimestamp = upstream?.EffectiveTimestamp;
         var label = node is WithNodePlan ? $"WITH '{node.Name}'" : node.Name;
         if (plan.TimestampBy is not null)
@@ -292,5 +450,10 @@ public static class StreamGraphPlanner
 
         node.EffectiveTimestamp = upstreamTimestamp;
         return true;
+    }
+
+    private readonly record struct OutputUsage(int TotalCount, bool HasUnion)
+    {
+        public OutputUsage Increment() => new OutputUsage(TotalCount + 1, HasUnion);
     }
 }
