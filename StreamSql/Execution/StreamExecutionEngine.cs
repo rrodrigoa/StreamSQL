@@ -1,4 +1,5 @@
 using ChronosQL.Engine;
+using ChronosQL.Engine.Sql;
 using StreamSql.Cli;
 using StreamSql.Input;
 using StreamSql.Output;
@@ -55,6 +56,21 @@ public sealed class StreamExecutionEngine
                 tasks.Add(RunWithAsync(withNode, runtime[withNode], linkedCts.Token));
             }
 
+            foreach (var joinNode in graphPlan.JoinNodes)
+            {
+                tasks.Add(RunJoinAsync(joinNode, runtime[joinNode], linkedCts.Token));
+            }
+
+            foreach (var selectNode in graphPlan.SelectNodes)
+            {
+                tasks.Add(RunSelectAsync(selectNode, runtime[selectNode], linkedCts.Token));
+            }
+
+            foreach (var unionNode in graphPlan.UnionNodes)
+            {
+                tasks.Add(RunUnionAsync(unionNode, runtime[unionNode], linkedCts.Token));
+            }
+
             foreach (var outputNode in graphPlan.OutputNodes)
             {
                 if (!outputWriters.TryGetValue(outputNode.Name, out var writer))
@@ -67,11 +83,6 @@ public sealed class StreamExecutionEngine
                 }
 
                 tasks.Add(RunOutputAsync(outputNode, runtime[outputNode], writer, linkedCts.Token));
-            }
-
-            foreach (var selectNode in graphPlan.SelectNodes)
-            {
-                tasks.Add(RunSelectAsync(selectNode, runtime[selectNode], linkedCts.Token));
             }
 
             await Task.WhenAll(tasks);
@@ -113,15 +124,38 @@ public sealed class StreamExecutionEngine
                 continue;
             }
 
-            runtime[node].Hub = new BroadcastHub<InputEvent>(_channelCapacity);
-            foreach (var downstream in node.Downstream)
+            if (node is SourceNodePlan or WithNodePlan or JoinNodePlan)
             {
-                if (downstream is OutputNodePlan)
+                runtime[node].Hub = new BroadcastHub<InputEvent>(_channelCapacity);
+                foreach (var downstream in node.Downstream)
                 {
-                    continue;
-                }
+                    if (downstream is OutputNodePlan or UnionNodePlan)
+                    {
+                        continue;
+                    }
 
-                runtime[downstream].Input = runtime[node].Hub!.AddConsumer();
+                    var input = runtime[node].Hub!.AddConsumer();
+                    if (downstream is JoinNodePlan joinNode)
+                    {
+                        var joinRuntime = runtime[joinNode];
+                        if (MatchesJoinInput(node.Name, joinNode.Join.LeftSource.Name))
+                        {
+                            joinRuntime.LeftInput = input;
+                        }
+                        else if (MatchesJoinInput(node.Name, joinNode.Join.RightSource.Name))
+                        {
+                            joinRuntime.RightInput = input;
+                        }
+                        else
+                        {
+                            throw new InvalidOperationException($"JOIN node '{joinNode.Name}' has an unknown input '{node.Name}'.");
+                        }
+                    }
+                    else
+                    {
+                        runtime[downstream].Input = input;
+                    }
+                }
             }
         }
 
@@ -134,14 +168,50 @@ public sealed class StreamExecutionEngine
                 SingleWriter = false,
                 FullMode = BoundedChannelFullMode.Wait
             });
-            runtime[outputNode].PendingWriters = outputNode.UpstreamCount;
+            runtime[outputNode].PendingWriters = outputNode.Upstreams.Count;
+        }
+
+        foreach (var unionNode in graphPlan.UnionNodes)
+        {
+            runtime[unionNode].JsonInput = Channel.CreateBounded<JsonElement>(new BoundedChannelOptions(_channelCapacity)
+            {
+                SingleReader = true,
+                SingleWriter = false,
+                FullMode = BoundedChannelFullMode.Wait
+            });
+            runtime[unionNode].PendingWriters = unionNode.Upstreams.Count;
+
+            if (unionNode.Downstream.Count != 1 || unionNode.Downstream[0] is not OutputNodePlan unionOutput)
+            {
+                throw new InvalidOperationException($"UNION node '{unionNode.Name}' has an invalid downstream configuration.");
+            }
+
+            runtime[unionNode].OutputWriter = runtime[unionOutput].Output!.Writer;
+            runtime[unionNode].OutputOwner = runtime[unionOutput];
         }
 
         foreach (var selectNode in graphPlan.SelectNodes)
         {
-            var outputNode = outputLookup[selectNode.OutputName];
-            runtime[selectNode].OutputWriter = runtime[outputNode].Output!.Writer;
-            runtime[selectNode].OutputOwner = runtime[outputNode];
+            if (selectNode.Downstream.Count != 1)
+            {
+                throw new InvalidOperationException($"SELECT {selectNode.Index} has an invalid downstream configuration.");
+            }
+
+            var downstream = selectNode.Downstream[0];
+            if (downstream is OutputNodePlan outputNode)
+            {
+                runtime[selectNode].OutputWriter = runtime[outputNode].Output!.Writer;
+                runtime[selectNode].OutputOwner = runtime[outputNode];
+            }
+            else if (downstream is UnionNodePlan unionNode)
+            {
+                runtime[selectNode].OutputWriter = runtime[unionNode].JsonInput!.Writer;
+                runtime[selectNode].OutputOwner = runtime[unionNode];
+            }
+            else
+            {
+                throw new InvalidOperationException($"SELECT {selectNode.Index} has an unsupported downstream node.");
+            }
         }
 
         return runtime;
@@ -231,6 +301,122 @@ public sealed class StreamExecutionEngine
         }
     }
 
+    private async Task RunJoinAsync(
+        JoinNodePlan node,
+        NodeRuntime runtime,
+        CancellationToken cancellationToken)
+    {
+        if (runtime.Hub is null || runtime.LeftInput is null || runtime.RightInput is null)
+        {
+            return;
+        }
+
+        var joinChannel = Channel.CreateUnbounded<(JoinSide Side, InputEvent Event)>();
+        var leftBuffer = new Dictionary<string, List<InputEvent>>(StringComparer.Ordinal);
+        var rightBuffer = new Dictionary<string, List<InputEvent>>(StringComparer.Ordinal);
+
+        async Task PumpAsync(ChannelReader<InputEvent> reader, JoinSide side)
+        {
+            await foreach (var input in reader.ReadAllAsync(cancellationToken))
+            {
+                await joinChannel.Writer.WriteAsync((side, input), cancellationToken);
+            }
+        }
+
+        var pumpLeft = Task.Run(() => PumpAsync(runtime.LeftInput, JoinSide.Left), cancellationToken);
+        var pumpRight = Task.Run(() => PumpAsync(runtime.RightInput, JoinSide.Right), cancellationToken);
+
+        _ = Task.WhenAll(pumpLeft, pumpRight).ContinueWith(
+            _ => joinChannel.Writer.TryComplete(),
+            cancellationToken);
+
+        try
+        {
+            await foreach (var item in joinChannel.Reader.ReadAllAsync(cancellationToken))
+            {
+                var side = item.Side;
+                var inputEvent = item.Event;
+                var keyReference = side == JoinSide.Left ? node.Join.LeftKey : node.Join.RightKey;
+                if (!TryGetJoinKey(inputEvent.Payload, keyReference, out var joinKey))
+                {
+                    continue;
+                }
+
+                var buffer = side == JoinSide.Left ? leftBuffer : rightBuffer;
+                if (!buffer.TryGetValue(joinKey, out var events))
+                {
+                    events = new List<InputEvent>();
+                    buffer[joinKey] = events;
+                }
+
+                events.Add(inputEvent);
+
+                var probe = side == JoinSide.Left ? rightBuffer : leftBuffer;
+                if (!probe.TryGetValue(joinKey, out var matches))
+                {
+                    continue;
+                }
+
+                foreach (var match in matches)
+                {
+                    var leftEvent = side == JoinSide.Left ? inputEvent : match;
+                    var rightEvent = side == JoinSide.Left ? match : inputEvent;
+                    var payload = BuildJoinPayload(node.Join, leftEvent.Payload, rightEvent.Payload);
+                    var timestamp = Math.Max(leftEvent.ArrivalTime, rightEvent.ArrivalTime);
+                    await runtime.Hub.BroadcastAsync(new InputEvent(payload, timestamp), cancellationToken);
+                }
+            }
+
+            runtime.Hub.Complete();
+        }
+        catch (Exception ex)
+        {
+            runtime.Hub.Complete(ex);
+            throw new InvalidOperationException($"JOIN '{node.Name}' failed: {ex.Message}", ex);
+        }
+    }
+
+    private async Task RunUnionAsync(
+        UnionNodePlan node,
+        NodeRuntime runtime,
+        CancellationToken cancellationToken)
+    {
+        if (runtime.JsonInput is null || runtime.OutputWriter is null)
+        {
+            return;
+        }
+
+        var seen = node.Distinct ? new HashSet<string>(StringComparer.Ordinal) : null;
+        Exception? outputError = null;
+
+        try
+        {
+            await foreach (var element in runtime.JsonInput.Reader.ReadAllAsync(cancellationToken))
+            {
+                if (seen is not null)
+                {
+                    var key = element.GetRawText();
+                    if (!seen.Add(key))
+                    {
+                        continue;
+                    }
+                }
+
+                await runtime.OutputWriter.WriteAsync(element, cancellationToken);
+            }
+        }
+        catch (Exception ex)
+        {
+            outputError = ex;
+            TryCompleteOutputOwner(runtime.OutputOwner, ex);
+            throw new InvalidOperationException($"UNION '{node.Name}' failed: {ex.Message}", ex);
+        }
+        finally
+        {
+            CompleteOutput(runtime.OutputOwner, outputError);
+        }
+    }
+
     private async Task RunSelectAsync(
         SelectNodePlan node,
         NodeRuntime runtime,
@@ -265,7 +451,7 @@ public sealed class StreamExecutionEngine
         catch (Exception ex)
         {
             outputError = ex;
-            runtime.OutputOwner?.Output?.Writer.TryComplete(ex);
+            TryCompleteOutputOwner(runtime.OutputOwner, ex);
             throw new InvalidOperationException($"SELECT {node.Index} failed: {ex.Message}", ex);
         }
         finally
@@ -299,6 +485,9 @@ public sealed class StreamExecutionEngine
     {
         public BroadcastHub<InputEvent>? Hub { get; set; }
         public ChannelReader<InputEvent>? Input { get; set; }
+        public ChannelReader<InputEvent>? LeftInput { get; set; }
+        public ChannelReader<InputEvent>? RightInput { get; set; }
+        public Channel<JsonElement>? JsonInput { get; set; }
         public Channel<JsonElement>? Output { get; set; }
         public ChannelWriter<JsonElement>? OutputWriter { get; set; }
         public NodeRuntime? OutputOwner { get; set; }
@@ -322,6 +511,22 @@ public sealed class StreamExecutionEngine
         }
     }
 
+    private static void TryCompleteOutputOwner(NodeRuntime? outputOwner, Exception error)
+    {
+        if (outputOwner is null)
+        {
+            return;
+        }
+
+        if (outputOwner.Output is not null)
+        {
+            outputOwner.Output.Writer.TryComplete(error);
+            return;
+        }
+
+        outputOwner.JsonInput?.Writer.TryComplete(error);
+    }
+
     private static void CompleteOutput(NodeRuntime? outputOwner, Exception? error)
     {
         if (outputOwner is null)
@@ -332,7 +537,79 @@ public sealed class StreamExecutionEngine
         var remaining = outputOwner.DecrementPendingWriters();
         if (remaining == 0)
         {
-            outputOwner.Output?.Writer.TryComplete(error);
+            if (outputOwner.Output is not null)
+            {
+                outputOwner.Output.Writer.TryComplete(error);
+                return;
+            }
+
+            outputOwner.JsonInput?.Writer.TryComplete(error);
         }
+    }
+
+    private static bool MatchesJoinInput(string upstreamName, string joinName) =>
+        upstreamName.Equals(joinName, StringComparison.OrdinalIgnoreCase);
+
+    private static bool TryGetJoinKey(JsonElement payload, FieldReference key, out string joinKey)
+    {
+        joinKey = string.Empty;
+        if (!TryGetProperty(payload, key.PathSegments, out var value))
+        {
+            return false;
+        }
+
+        joinKey = value.GetRawText();
+        return true;
+    }
+
+    private static JsonElement BuildJoinPayload(
+        JoinDefinition join,
+        JsonElement leftPayload,
+        JsonElement rightPayload)
+    {
+        var leftAlias = string.IsNullOrWhiteSpace(join.LeftSource.Alias)
+            ? join.LeftSource.Name
+            : join.LeftSource.Alias!;
+        var rightAlias = string.IsNullOrWhiteSpace(join.RightSource.Alias)
+            ? join.RightSource.Name
+            : join.RightSource.Alias!;
+
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            writer.WritePropertyName(leftAlias);
+            leftPayload.WriteTo(writer);
+            writer.WritePropertyName(rightAlias);
+            rightPayload.WriteTo(writer);
+            writer.WriteEndObject();
+        }
+
+        stream.Position = 0;
+        using var document = JsonDocument.Parse(stream);
+        return document.RootElement.Clone();
+    }
+
+    private static bool TryGetProperty(JsonElement payload, IReadOnlyList<string> pathSegments, out JsonElement value)
+    {
+        value = payload;
+
+        foreach (var segment in pathSegments)
+        {
+            if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(segment, out var next))
+            {
+                return false;
+            }
+
+            value = next;
+        }
+
+        return true;
+    }
+
+    private enum JoinSide
+    {
+        Left,
+        Right
     }
 }

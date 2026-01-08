@@ -32,16 +32,7 @@ public static class SqlParser
                 throw new InvalidOperationException("Only SELECT statements are supported.");
             }
 
-            var visitor = new SqlValidationVisitor();
-            selectStatement.Accept(visitor);
-
-            if (visitor.Unsupported.Count > 0)
-            {
-                var details = string.Join(", ", visitor.Unsupported);
-                throw new InvalidOperationException($"Unsupported SQL syntax detected: {details}");
-            }
-
-            plans.Add(BuildPlan(selectStatement.ToString(), visitor));
+            plans.Add(Parse(selectStatement));
         }
 
         return new SqlScriptPlan(sql, plans);
@@ -69,47 +60,136 @@ public static class SqlParser
         return string.Join(".", name.Identifiers.Select(id => id.Value));
     }
 
+    private static SqlPlan BuildUnionPlan(BinaryQueryExpression expression)
+    {
+        var branches = new List<SqlPlan>();
+        bool? distinct = null;
+        if (!TryCollectUnionBranches(expression, branches, ref distinct, out var error))
+        {
+            throw new InvalidOperationException(error ?? "Unsupported SQL syntax detected: UNION.");
+        }
+
+        if (branches.Count < 2)
+        {
+            throw new InvalidOperationException("UNION must have at least two branches.");
+        }
+
+        EnsureUnionSchema(branches);
+
+        return new SqlPlan(
+            expression.ToString(),
+            Array.Empty<InputSourceDefinition>(),
+            null,
+            new UnionDefinition(distinct ?? true, branches),
+            null,
+            null,
+            Array.Empty<SelectItem>(),
+            Array.Empty<FieldReference>(),
+            null,
+            Array.Empty<AggregateDefinition>(),
+            null,
+            null,
+            Array.Empty<OrderByDefinition>());
+    }
+
+    private static bool TryCollectUnionBranches(
+        QueryExpression expression,
+        List<SqlPlan> branches,
+        ref bool? distinct,
+        out string? error)
+    {
+        error = null;
+        if (expression is QuerySpecification querySpecification)
+        {
+            branches.Add(Parse(querySpecification));
+            return true;
+        }
+
+        if (expression is not BinaryQueryExpression binaryExpression ||
+            binaryExpression.BinaryQueryExpressionType != BinaryQueryExpressionType.Union)
+        {
+            error = "Only UNION is supported.";
+            return false;
+        }
+
+        var isDistinct = !binaryExpression.All;
+        if (distinct.HasValue && distinct.Value != isDistinct)
+        {
+            error = "Mixing UNION and UNION ALL is not supported.";
+            return false;
+        }
+
+        distinct ??= isDistinct;
+
+        return TryCollectUnionBranches(binaryExpression.FirstQueryExpression, branches, ref distinct, out error)
+            && TryCollectUnionBranches(binaryExpression.SecondQueryExpression, branches, ref distinct, out error);
+    }
+
+    private static void EnsureUnionSchema(IReadOnlyList<SqlPlan> branches)
+    {
+        var first = branches[0].SelectItems;
+        foreach (var branch in branches.Skip(1))
+        {
+            if (branch.SelectItems.Count != first.Count)
+            {
+                throw new InvalidOperationException("UNION branches must have matching schemas.");
+            }
+
+            for (var i = 0; i < first.Count; i++)
+            {
+                if (!first[i].OutputName.Equals(branch.SelectItems[i].OutputName, StringComparison.OrdinalIgnoreCase) ||
+                    first[i].Kind != branch.SelectItems[i].Kind)
+                {
+                    throw new InvalidOperationException("UNION branches must have matching schemas.");
+                }
+            }
+        }
+    }
+
     public static SqlPlan Parse(SelectStatement selectStatement)
     {
-        var visitor = new SqlValidationVisitor();
         if (selectStatement.QueryExpression is null)
         {
             throw new InvalidOperationException("SELECT statement does not contain a query expression.");
         }
 
-        selectStatement.QueryExpression.Accept(visitor);
+        if (selectStatement.OrderByClause is not null &&
+            selectStatement.QueryExpression is BinaryQueryExpression)
+        {
+            throw new InvalidOperationException("ORDER BY is not supported with UNION.");
+        }
 
+        var plan = Parse(selectStatement.QueryExpression);
         if (selectStatement.Into is not null)
         {
-            visitor.SetOutputStream(GetSchemaObjectName(selectStatement.Into));
+            plan = plan with { OutputStream = GetSchemaObjectName(selectStatement.Into) };
         }
 
-        if (visitor.Unsupported.Count > 0)
-        {
-            var details = string.Join(", ", visitor.Unsupported);
-            throw new InvalidOperationException($"Unsupported SQL syntax detected: {details}");
-        }
-
-        return BuildPlan(selectStatement.ToString(), visitor);
+        return plan;
     }
 
     public static SqlPlan Parse(QueryExpression queryExpression)
     {
-        if (queryExpression is not QuerySpecification)
+        if (queryExpression is QuerySpecification)
         {
-            throw new InvalidOperationException("Only simple SELECT statements are supported");
+            var visitor = new SqlValidationVisitor();
+            queryExpression.Accept(visitor);
+
+            if (visitor.Unsupported.Count > 0)
+            {
+                var details = string.Join(", ", visitor.Unsupported);
+                throw new InvalidOperationException($"Unsupported SQL syntax detected: {details}");
+            }
+
+            return BuildPlan(queryExpression.ToString(), visitor);
         }
 
-        var visitor = new SqlValidationVisitor();
-        queryExpression.Accept(visitor);
-
-        if (visitor.Unsupported.Count > 0)
+        if (queryExpression is BinaryQueryExpression binaryExpression)
         {
-            var details = string.Join(", ", visitor.Unsupported);
-            throw new InvalidOperationException($"Unsupported SQL syntax detected: {details}");
+            return BuildUnionPlan(binaryExpression);
         }
 
-        return BuildPlan(queryExpression.ToString(), visitor);
+        throw new InvalidOperationException("Only simple SELECT statements are supported");
     }
 
     private static IEnumerable<TSqlStatement> ExtractStatements(TSqlFragment fragment)
@@ -147,7 +227,9 @@ public static class SqlParser
     {
         return new SqlPlan(
             rawSql,
-            visitor.InputStream,
+            visitor.InputSources,
+            visitor.Join,
+            null,
             visitor.OutputStream,
             visitor.TimestampBy,
             visitor.SelectItems,
@@ -163,7 +245,8 @@ public static class SqlParser
     {
         private const string NestedPathError = "Nested JSON paths beyond one level require ChronosQL Pro";
         public List<string> Unsupported { get; } = new();
-        public string? InputStream { get; private set; }
+        public List<InputSourceDefinition> InputSources { get; } = new();
+        public JoinDefinition? Join { get; private set; }
         public string? OutputStream { get; private set; }
         public TimestampByDefinition? TimestampBy { get; private set; }
         public List<SelectItem> SelectItems { get; } = new();
@@ -206,7 +289,7 @@ public static class SqlParser
 
                 if (scalar.Expression is ColumnReferenceExpression column)
                 {
-                    if (!TryBuildFieldReference(column, InputStream, out var fieldReference, out var error))
+                    if (!TryBuildFieldReference(column, InputSources, out var fieldReference, out var error))
                     {
                         if (!string.IsNullOrWhiteSpace(error))
                         {
@@ -232,7 +315,7 @@ public static class SqlParser
                         continue;
                     }
 
-                    if (!TryBuildAggregate(functionCall, scalar.ColumnName?.Value, InputStream, out var aggregate, out var error))
+                    if (!TryBuildAggregate(functionCall, scalar.ColumnName?.Value, InputSources, out var aggregate, out var error))
                     {
                         Unsupported.Add(error ?? "SELECT aggregate");
                         continue;
@@ -252,7 +335,7 @@ public static class SqlParser
                 {
                     Unsupported.Add("Only one TIMESTAMP BY clause is supported.");
                 }
-                else if (!TryBuildTimestampBy(timestampExpression, InputStream, out var timestampBy, out var error))
+                else if (!TryBuildTimestampBy(timestampExpression, InputSources, out var timestampBy, out var error))
                 {
                     Unsupported.Add(error ?? "TIMESTAMP BY expression");
                 }
@@ -264,7 +347,7 @@ public static class SqlParser
 
             if (node.WhereClause is not null)
             {
-                Filter = BuildFilter(node.WhereClause.SearchCondition, InputStream, out var error);
+                Filter = BuildFilter(node.WhereClause.SearchCondition, InputSources, out var error);
                 if (Filter is null)
                 {
                     Unsupported.Add(error ?? "WHERE clause");
@@ -309,7 +392,7 @@ public static class SqlParser
                             continue;
                         }
 
-                        if (!TryBuildFieldReference(column, InputStream, out var fieldReference, out var error))
+                        if (!TryBuildFieldReference(column, InputSources, out var fieldReference, out var error))
                         {
                             Unsupported.Add(error ?? "GROUP BY column");
                             continue;
@@ -342,22 +425,25 @@ public static class SqlParser
                 return;
             }
 
-            if (node.TableReferences[0] is NamedTableReference namedTable)
+            if (node.TableReferences.Count > 1)
             {
-                InputStream = GetSchemaObjectName(namedTable.SchemaObject);
+                Unsupported.Add("FROM reference");
                 return;
             }
 
-            Unsupported.Add("FROM reference");
+            if (TryBuildInputSources(node.TableReferences[0], out var inputSources, out var join, out var error))
+            {
+                InputSources.AddRange(inputSources);
+                Join = join;
+                return;
+            }
+
+            Unsupported.Add(error ?? "FROM reference");
         }
 
         public override void ExplicitVisit(SelectStatement node)
         {
             base.ExplicitVisit(node);
-            if (node.QueryExpression is not QuerySpecification)
-            {
-                Unsupported.Add("Only simple SELECT statements are supported");
-            }
             if (node.Into is not null)
             {
                 OutputStream = GetSchemaObjectName(node.Into);
@@ -387,9 +473,231 @@ public static class SqlParser
             return string.Join('.', schemaObjectName.Identifiers.Select(id => id.Value));
         }
 
+        private static bool TryBuildInputSources(
+            TableReference tableReference,
+            out List<InputSourceDefinition> inputSources,
+            out JoinDefinition? join,
+            out string? error)
+        {
+            inputSources = new List<InputSourceDefinition>();
+            join = null;
+            error = null;
+
+            if (tableReference is NamedTableReference namedTable)
+            {
+                if (!TryBuildInputSource(namedTable, out var source, out error))
+                {
+                    return false;
+                }
+
+                inputSources.Add(source);
+                return true;
+            }
+
+            if (tableReference is QualifiedJoin qualifiedJoin)
+            {
+                if (qualifiedJoin.QualifiedJoinType != QualifiedJoinType.Inner)
+                {
+                    error = "Only INNER JOIN is supported.";
+                    return false;
+                }
+
+                if (qualifiedJoin.FirstTableReference is not NamedTableReference leftReference ||
+                    qualifiedJoin.SecondTableReference is not NamedTableReference rightReference)
+                {
+                    error = "JOIN references must be named inputs.";
+                    return false;
+                }
+
+                if (!TryBuildInputSource(leftReference, out var leftSource, out error) ||
+                    !TryBuildInputSource(rightReference, out var rightSource, out error))
+                {
+                    return false;
+                }
+
+                var leftAlias = GetSourceAlias(leftSource);
+                var rightAlias = GetSourceAlias(rightSource);
+                if (leftAlias.Equals(rightAlias, StringComparison.OrdinalIgnoreCase))
+                {
+                    error = "JOIN inputs must have distinct names.";
+                    return false;
+                }
+
+                if (!TryBuildJoinKeys(qualifiedJoin.SearchCondition, leftSource, rightSource, out var leftKey, out var rightKey, out error))
+                {
+                    return false;
+                }
+
+                inputSources.Add(leftSource);
+                inputSources.Add(rightSource);
+                join = new JoinDefinition(leftSource, rightSource, leftKey, rightKey);
+                return true;
+            }
+
+            error = "FROM reference";
+            return false;
+        }
+
+        private static bool TryBuildInputSource(
+            NamedTableReference reference,
+            out InputSourceDefinition source,
+            out string? error)
+        {
+            source = default!;
+            error = null;
+
+            var name = GetSchemaObjectName(reference.SchemaObject);
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                error = "FROM reference";
+                return false;
+            }
+
+            var alias = reference.Alias?.Value;
+            source = new InputSourceDefinition(name, alias);
+            return true;
+        }
+
+        private static string GetSourceAlias(InputSourceDefinition source) =>
+            string.IsNullOrWhiteSpace(source.Alias) ? source.Name : source.Alias;
+
+        private static bool TryBuildJoinKeys(
+            BooleanExpression? condition,
+            InputSourceDefinition leftSource,
+            InputSourceDefinition rightSource,
+            out FieldReference leftKey,
+            out FieldReference rightKey,
+            out string? error)
+        {
+            leftKey = default!;
+            rightKey = default!;
+            error = null;
+
+            if (condition is not BooleanComparisonExpression comparison ||
+                comparison.ComparisonType != BooleanComparisonType.Equals)
+            {
+                error = "JOIN ON requires an equality predicate.";
+                return false;
+            }
+
+            if (comparison.FirstExpression is not ColumnReferenceExpression firstColumn ||
+                comparison.SecondExpression is not ColumnReferenceExpression secondColumn)
+            {
+                error = "JOIN ON requires column references.";
+                return false;
+            }
+
+            if (!TryBuildJoinKey(firstColumn, leftSource, rightSource, out var firstKey, out var firstSide, out error))
+            {
+                return false;
+            }
+
+            if (!TryBuildJoinKey(secondColumn, leftSource, rightSource, out var secondKey, out var secondSide, out error))
+            {
+                return false;
+            }
+
+            if (firstSide == secondSide)
+            {
+                error = "JOIN ON must reference both inputs.";
+                return false;
+            }
+
+            if (firstSide == JoinSide.Left)
+            {
+                leftKey = firstKey;
+                rightKey = secondKey;
+            }
+            else
+            {
+                leftKey = secondKey;
+                rightKey = firstKey;
+            }
+
+            return true;
+        }
+
+        private enum JoinSide
+        {
+            Left,
+            Right
+        }
+
+        private static bool TryBuildJoinKey(
+            ColumnReferenceExpression column,
+            InputSourceDefinition leftSource,
+            InputSourceDefinition rightSource,
+            out FieldReference field,
+            out JoinSide side,
+            out string? error)
+        {
+            field = default!;
+            side = JoinSide.Left;
+            error = null;
+
+            if (column.MultiPartIdentifier?.Identifiers is null || column.MultiPartIdentifier.Identifiers.Count == 0)
+            {
+                error = "JOIN ON requires qualified columns.";
+                return false;
+            }
+
+            var identifiers = column.MultiPartIdentifier.Identifiers.Select(id => id.Value).ToList();
+            if (identifiers.Count < 2)
+            {
+                error = "JOIN ON requires qualified columns.";
+                return false;
+            }
+
+            var sourceName = identifiers[0];
+            if (MatchesSource(sourceName, leftSource))
+            {
+                side = JoinSide.Left;
+            }
+            else if (MatchesSource(sourceName, rightSource))
+            {
+                side = JoinSide.Right;
+            }
+            else
+            {
+                error = "JOIN ON references unknown input.";
+                return false;
+            }
+
+            identifiers.RemoveAt(0);
+            if (identifiers.Count > 2)
+            {
+                error = NestedPathError;
+                return false;
+            }
+
+            field = new FieldReference(identifiers);
+            return true;
+        }
+
+        private static bool TryResolveSourceAlias(string identifier, IReadOnlyList<InputSourceDefinition> inputSources) =>
+            inputSources.Any(source => MatchesSource(identifier, source));
+
+        private static bool MatchesSource(string identifier, InputSourceDefinition source)
+        {
+            if (!string.IsNullOrWhiteSpace(source.Alias) &&
+                identifier.Equals(source.Alias, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (identifier.Equals(source.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            var normalized = NormalizeStreamName(source.Name);
+            return !string.IsNullOrWhiteSpace(normalized) &&
+                   identifier.Equals(normalized, StringComparison.OrdinalIgnoreCase);
+        }
+
         private static bool TryBuildFieldReference(
             ColumnReferenceExpression column,
-            string? inputStream,
+            IReadOnlyList<InputSourceDefinition> inputSources,
             out FieldReference fieldReference,
             out string? error)
         {
@@ -402,24 +710,53 @@ public static class SqlParser
             }
 
             var identifiers = column.MultiPartIdentifier.Identifiers.Select(id => id.Value).ToList();
-            if (identifiers.Count > 1)
+            if (inputSources.Count == 0)
             {
-                var streamName = NormalizeStreamName(inputStream);
-                if (!string.IsNullOrWhiteSpace(streamName) &&
-                    identifiers[0].Equals(streamName, StringComparison.OrdinalIgnoreCase))
-                {
-                    identifiers.RemoveAt(0);
-                }
-            }
-
-            if (identifiers.Count > 2)
-            {
-                error = NestedPathError;
                 return false;
             }
 
-            if (identifiers.Count == 0)
+            if (inputSources.Count == 1)
             {
+                if (identifiers.Count > 1)
+                {
+                    var streamName = NormalizeStreamName(inputSources[0].Name);
+                    var aliasName = inputSources[0].Alias;
+                    if (!string.IsNullOrWhiteSpace(streamName) &&
+                        identifiers[0].Equals(streamName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        identifiers.RemoveAt(0);
+                    }
+                    else if (!string.IsNullOrWhiteSpace(aliasName) &&
+                             identifiers[0].Equals(aliasName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        identifiers.RemoveAt(0);
+                    }
+                }
+
+                if (identifiers.Count > 2)
+                {
+                    error = NestedPathError;
+                    return false;
+                }
+
+                if (identifiers.Count == 0)
+                {
+                    return false;
+                }
+
+                fieldReference = new FieldReference(identifiers);
+                return true;
+            }
+
+            if (!TryResolveSourceAlias(identifiers[0], inputSources))
+            {
+                error = "JOIN column references must be qualified with a source name.";
+                return false;
+            }
+
+            if (identifiers.Count > 3)
+            {
+                error = NestedPathError;
                 return false;
             }
 
@@ -450,7 +787,7 @@ public static class SqlParser
 
         private static bool TryBuildTimestampBy(
             ScalarExpression expression,
-            string? inputStream,
+            IReadOnlyList<InputSourceDefinition> inputSources,
             out TimestampByDefinition? timestampBy,
             out string? error)
         {
@@ -460,7 +797,7 @@ public static class SqlParser
             var unwrapped = UnwrapParentheses(expression);
             if (unwrapped is ColumnReferenceExpression column)
             {
-                if (!TryBuildFieldReference(column, inputStream, out var fieldReference, out error))
+                if (!TryBuildFieldReference(column, inputSources, out var fieldReference, out error))
                 {
                     return false;
                 }
@@ -524,7 +861,7 @@ public static class SqlParser
                     return false;
                 }
 
-                if (!TryBuildAggregate(functionCall, null, InputStream, out var aggregate, out error))
+                if (!TryBuildAggregate(functionCall, null, InputSources, out var aggregate, out error))
                 {
                     return false;
                 }
@@ -602,7 +939,7 @@ public static class SqlParser
                 }
             }
 
-            if (!TryBuildFieldReference(column, InputStream, out var fieldReference, out error))
+            if (!TryBuildFieldReference(column, InputSources, out var fieldReference, out error))
             {
                 return false;
             }
@@ -630,7 +967,7 @@ public static class SqlParser
             return segments.Length > 0 ? segments[^1] : inputStream;
         }
 
-        private static FilterDefinition? BuildFilter(BooleanExpression? searchCondition, string? inputStream, out string? error)
+        private static FilterDefinition? BuildFilter(BooleanExpression? searchCondition, IReadOnlyList<InputSourceDefinition> inputSources, out string? error)
         {
             error = null;
             if (searchCondition is null)
@@ -639,7 +976,7 @@ public static class SqlParser
             }
 
             var conditions = new List<FilterCondition>();
-            if (!TryCollectConditions(searchCondition, inputStream, conditions, out error))
+            if (!TryCollectConditions(searchCondition, inputSources, conditions, out error))
             {
                 return null;
             }
@@ -666,7 +1003,7 @@ public static class SqlParser
 
         private static bool TryCollectConditions(
             BooleanExpression expression,
-            string? inputStream,
+            IReadOnlyList<InputSourceDefinition> inputSources,
             List<FilterCondition> conditions,
             out string? error)
         {
@@ -679,8 +1016,8 @@ public static class SqlParser
                     return false;
                 }
 
-                return TryCollectConditions(binary.FirstExpression, inputStream, conditions, out error)
-                    && TryCollectConditions(binary.SecondExpression, inputStream, conditions, out error);
+                return TryCollectConditions(binary.FirstExpression, inputSources, conditions, out error)
+                    && TryCollectConditions(binary.SecondExpression, inputSources, conditions, out error);
             }
 
             if (expression is not BooleanComparisonExpression comparison)
@@ -698,7 +1035,7 @@ public static class SqlParser
             if (comparison.FirstExpression is ColumnReferenceExpression column &&
                 TryGetLiteral(comparison.SecondExpression, out var literal))
             {
-                if (!TryBuildFieldReference(column, inputStream, out var fieldReference, out error))
+                if (!TryBuildFieldReference(column, inputSources, out var fieldReference, out error))
                 {
                     return false;
                 }
@@ -761,7 +1098,7 @@ public static class SqlParser
                     return false;
                 }
 
-                if (!TryBuildFieldReference(column, InputStream, out var fieldReference, out error))
+                if (!TryBuildFieldReference(column, InputSources, out var fieldReference, out error))
                 {
                     return false;
                 }
@@ -787,7 +1124,7 @@ public static class SqlParser
                     return false;
                 }
 
-                if (!TryBuildAggregate(functionCall, null, InputStream, out var aggregate, out error))
+                if (!TryBuildAggregate(functionCall, null, InputSources, out var aggregate, out error))
                 {
                     return false;
                 }
@@ -865,7 +1202,7 @@ public static class SqlParser
         private static bool TryBuildAggregate(
             FunctionCall functionCall,
             string? alias,
-            string? inputStream,
+            IReadOnlyList<InputSourceDefinition> inputSources,
             out AggregateDefinition? aggregate,
             out string? error)
         {
@@ -902,7 +1239,7 @@ public static class SqlParser
 
                     if (functionCall.Parameters[0] is ColumnReferenceExpression countColumn)
                     {
-                        if (!TryBuildFieldReference(countColumn, inputStream, out var countField, out error))
+                        if (!TryBuildFieldReference(countColumn, inputSources, out var countField, out error))
                         {
                             return false;
                         }
@@ -922,7 +1259,7 @@ public static class SqlParser
                 return false;
             }
 
-            if (!TryBuildFieldReference(column, inputStream, out var fieldReference, out error))
+            if (!TryBuildFieldReference(column, inputSources, out var fieldReference, out error))
             {
                 return false;
             }

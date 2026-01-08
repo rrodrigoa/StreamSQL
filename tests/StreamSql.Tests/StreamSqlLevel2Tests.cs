@@ -1,4 +1,5 @@
 using System.Text;
+using System.Linq;
 using StreamSql;
 using StreamSql.Input;
 using Xunit;
@@ -631,6 +632,415 @@ public class StreamSqlLevel2Tests
             var exitCode = await Program.Main(args);
             Assert.Equal(1, exitCode);
             Assert.Equal("SELECT 1 references unknown output 'missing'.", errorWriter.ToString().Trim());
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+    }
+
+    [Fact]
+    public async Task ExecutesInnerJoinWithNamedInputs()
+    {
+        var sql = "SELECT left.data.value AS left_value, right.data.other AS right_value INTO joined_out FROM left_input AS left JOIN right_input AS right ON left.data.id = right.data.id;";
+
+        var leftPath = Path.GetTempFileName();
+        var rightPath = Path.GetTempFileName();
+        var outputPath = Path.GetTempFileName();
+
+        try
+        {
+            await File.WriteAllTextAsync(leftPath, "{\"data\":{\"id\":1,\"value\":10}}\n{\"data\":{\"id\":2,\"value\":20}}\n");
+            await File.WriteAllTextAsync(rightPath, "{\"data\":{\"id\":2,\"other\":200}}\n{\"data\":{\"id\":3,\"other\":300}}\n");
+            await File.WriteAllTextAsync(outputPath, string.Empty);
+
+            var args = new[]
+            {
+                "--query", sql,
+                "--input", $"left_input={leftPath}",
+                "--input", $"right_input={rightPath}",
+                "--output", $"joined_out={outputPath}"
+            };
+
+            var exitCode = await Program.Main(args);
+            Assert.Equal(0, exitCode);
+
+            var output = await File.ReadAllTextAsync(outputPath);
+            var lines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(new[] { "{\"left_value\":20,\"right_value\":200}" }, lines);
+        }
+        finally
+        {
+            File.Delete(leftPath);
+            File.Delete(rightPath);
+            File.Delete(outputPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecutesJoinWithStdin()
+    {
+        var sql = "SELECT left.data.value AS left_value, right.data.other AS right_value INTO joined_out FROM stdin_input AS left JOIN file_input AS right ON left.data.id = right.data.id;";
+
+        var filePath = Path.GetTempFileName();
+        var outputPath = Path.GetTempFileName();
+        var stdinData = string.Join('\n', new[]
+        {
+            "{\"data\":{\"id\":1,\"value\":5}}",
+            "{\"data\":{\"id\":2,\"value\":15}}"
+        }) + "\n";
+
+        var stdinStream = new MemoryStream(Encoding.UTF8.GetBytes(stdinData));
+
+        try
+        {
+            await File.WriteAllTextAsync(filePath, "{\"data\":{\"id\":2,\"other\":300}}\n");
+            await File.WriteAllTextAsync(outputPath, string.Empty);
+
+            StreamReaderFactory.InputOverride = stdinStream;
+
+            var args = new[]
+            {
+                "--query", sql,
+                "--input", "stdin_input=-",
+                "--input", $"file_input={filePath}",
+                "--output", $"joined_out={outputPath}"
+            };
+
+            var exitCode = await Program.Main(args);
+            Assert.Equal(0, exitCode);
+
+            var output = await File.ReadAllTextAsync(outputPath);
+            var lines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(new[] { "{\"left_value\":15,\"right_value\":300}" }, lines);
+        }
+        finally
+        {
+            StreamReaderFactory.InputOverride = null;
+            stdinStream.Dispose();
+            File.Delete(filePath);
+            File.Delete(outputPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecutesJoinWithTimestampBy()
+    {
+        var sql = "SELECT COUNT(*) AS count INTO joined_out FROM left_input AS left JOIN right_input AS right ON left.id = right.id TIMESTAMP BY left.ts GROUP BY TUMBLINGWINDOW(second, 1);";
+
+        var leftPath = Path.GetTempFileName();
+        var rightPath = Path.GetTempFileName();
+        var outputPath = Path.GetTempFileName();
+
+        try
+        {
+            await File.WriteAllTextAsync(leftPath, "{\"id\":1,\"ts\":1000}\n{\"id\":2,\"ts\":1500}\n");
+            await File.WriteAllTextAsync(rightPath, "{\"id\":1}\n{\"id\":2}\n");
+            await File.WriteAllTextAsync(outputPath, string.Empty);
+
+            var args = new[]
+            {
+                "--query", sql,
+                "--input", $"left_input={leftPath}",
+                "--input", $"right_input={rightPath}",
+                "--output", $"joined_out={outputPath}"
+            };
+
+            var exitCode = await Program.Main(args);
+            Assert.Equal(0, exitCode);
+
+            var output = await File.ReadAllTextAsync(outputPath);
+            var lines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(new[] { "{\"windowStart\":1000,\"windowEnd\":2000,\"count\":2}" }, lines);
+        }
+        finally
+        {
+            File.Delete(leftPath);
+            File.Delete(rightPath);
+            File.Delete(outputPath);
+        }
+    }
+
+    [Fact]
+    public async Task FailsJoinWithUnsupportedPredicate()
+    {
+        var sql = "SELECT left.data.value INTO out FROM left_input AS left JOIN right_input AS right ON left.data.id > right.data.id;";
+        var args = new[]
+        {
+            "--query", sql,
+            "--output", "out=-"
+        };
+
+        var previousError = Console.Error;
+        var errorWriter = new StringWriter();
+        Console.SetError(errorWriter);
+
+        try
+        {
+            var exitCode = await Program.Main(args);
+            Assert.Equal(1, exitCode);
+            Assert.Contains("JOIN ON requires an equality predicate", errorWriter.ToString());
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+    }
+
+    [Fact]
+    public async Task FailsJoinWhenInputIsMissing()
+    {
+        var sql = "SELECT left.data.value INTO out FROM missing_left AS left JOIN right_input AS right ON left.data.id = right.data.id;";
+        var rightPath = Path.GetTempFileName();
+
+        var previousError = Console.Error;
+        var errorWriter = new StringWriter();
+        Console.SetError(errorWriter);
+
+        try
+        {
+            await File.WriteAllTextAsync(rightPath, "{\"data\":{\"id\":1}}\n");
+
+            var args = new[]
+            {
+                "--query", sql,
+                "--input", $"right_input={rightPath}",
+                "--output", "out=-"
+            };
+
+            var exitCode = await Program.Main(args);
+            Assert.Equal(1, exitCode);
+            Assert.Equal("SELECT 1 references unknown input 'missing_left'.", errorWriter.ToString().Trim());
+        }
+        finally
+        {
+            Console.SetError(previousError);
+            File.Delete(rightPath);
+        }
+    }
+
+    [Fact]
+    public async Task FailsJoinWithAmbiguousColumnReferences()
+    {
+        var sql = "SELECT id INTO out FROM left_input AS left JOIN right_input AS right ON left.id = right.id;";
+        var args = new[]
+        {
+            "--query", sql,
+            "--output", "out=-"
+        };
+
+        var previousError = Console.Error;
+        var errorWriter = new StringWriter();
+        Console.SetError(errorWriter);
+
+        try
+        {
+            var exitCode = await Program.Main(args);
+            Assert.Equal(1, exitCode);
+            Assert.Contains("JOIN column references must be qualified", errorWriter.ToString());
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+    }
+
+    [Fact]
+    public async Task ExecutesUnionAll()
+    {
+        var sql = "SELECT data.value AS v INTO out FROM first_input UNION ALL SELECT data.value AS v FROM second_input;";
+
+        var firstPath = Path.GetTempFileName();
+        var secondPath = Path.GetTempFileName();
+        var outputPath = Path.GetTempFileName();
+
+        try
+        {
+            await File.WriteAllTextAsync(firstPath, "{\"data\":{\"value\":1}}\n{\"data\":{\"value\":2}}\n");
+            await File.WriteAllTextAsync(secondPath, "{\"data\":{\"value\":3}}\n");
+            await File.WriteAllTextAsync(outputPath, string.Empty);
+
+            var args = new[]
+            {
+                "--query", sql,
+                "--input", $"first_input={firstPath}",
+                "--input", $"second_input={secondPath}",
+                "--output", $"out={outputPath}"
+            };
+
+            var exitCode = await Program.Main(args);
+            Assert.Equal(0, exitCode);
+
+            var output = await File.ReadAllTextAsync(outputPath);
+            var lines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+                .OrderBy(line => line, StringComparer.Ordinal)
+                .ToArray();
+            Assert.Equal(new[] { "{\"v\":1}", "{\"v\":2}", "{\"v\":3}" }, lines);
+        }
+        finally
+        {
+            File.Delete(firstPath);
+            File.Delete(secondPath);
+            File.Delete(outputPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecutesUnionDistinct()
+    {
+        var sql = "SELECT data.value AS v INTO out FROM first_input UNION SELECT data.value AS v FROM second_input;";
+
+        var firstPath = Path.GetTempFileName();
+        var secondPath = Path.GetTempFileName();
+        var outputPath = Path.GetTempFileName();
+
+        try
+        {
+            await File.WriteAllTextAsync(firstPath, "{\"data\":{\"value\":1}}\n{\"data\":{\"value\":2}}\n");
+            await File.WriteAllTextAsync(secondPath, "{\"data\":{\"value\":2}}\n{\"data\":{\"value\":3}}\n");
+            await File.WriteAllTextAsync(outputPath, string.Empty);
+
+            var args = new[]
+            {
+                "--query", sql,
+                "--input", $"first_input={firstPath}",
+                "--input", $"second_input={secondPath}",
+                "--output", $"out={outputPath}"
+            };
+
+            var exitCode = await Program.Main(args);
+            Assert.Equal(0, exitCode);
+
+            var output = await File.ReadAllTextAsync(outputPath);
+            var lines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+                .OrderBy(line => line, StringComparer.Ordinal)
+                .ToArray();
+            Assert.Equal(new[] { "{\"v\":1}", "{\"v\":2}", "{\"v\":3}" }, lines);
+        }
+        finally
+        {
+            File.Delete(firstPath);
+            File.Delete(secondPath);
+            File.Delete(outputPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecutesUnionWithCte()
+    {
+        var sql = string.Join(Environment.NewLine, new[]
+        {
+            "WITH cte AS (SELECT data.value AS v FROM input)",
+            "SELECT v INTO out FROM cte UNION ALL SELECT v FROM cte;"
+        });
+
+        var inputPath = Path.GetTempFileName();
+        var outputPath = Path.GetTempFileName();
+
+        try
+        {
+            await File.WriteAllTextAsync(inputPath, "{\"data\":{\"value\":7}}\n{\"data\":{\"value\":8}}\n");
+            await File.WriteAllTextAsync(outputPath, string.Empty);
+
+            var args = new[]
+            {
+                "--query", sql,
+                "--input", $"input={inputPath}",
+                "--output", $"out={outputPath}"
+            };
+
+            var exitCode = await Program.Main(args);
+            Assert.Equal(0, exitCode);
+
+            var output = await File.ReadAllTextAsync(outputPath);
+            var lines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+                .OrderBy(line => line, StringComparer.Ordinal)
+                .ToArray();
+            Assert.Equal(new[] { "{\"v\":7}", "{\"v\":7}", "{\"v\":8}", "{\"v\":8}" }, lines);
+        }
+        finally
+        {
+            File.Delete(inputPath);
+            File.Delete(outputPath);
+        }
+    }
+
+    [Fact]
+    public async Task FailsUnionWithMismatchedSchemas()
+    {
+        var sql = "SELECT data.value AS v INTO out FROM first_input UNION ALL SELECT data.other AS other FROM second_input;";
+        var args = new[]
+        {
+            "--query", sql,
+            "--output", "out=-"
+        };
+
+        var previousError = Console.Error;
+        var errorWriter = new StringWriter();
+        Console.SetError(errorWriter);
+
+        try
+        {
+            var exitCode = await Program.Main(args);
+            Assert.Equal(1, exitCode);
+            Assert.Contains("UNION branches must have matching schemas", errorWriter.ToString());
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+    }
+
+    [Fact]
+    public async Task FailsWhenUnionSharesOutputWithAnotherSelect()
+    {
+        var sql = string.Join(Environment.NewLine, new[]
+        {
+            "SELECT data.value AS v INTO out FROM first_input UNION ALL SELECT data.value AS v FROM second_input;",
+            "SELECT data.value AS v INTO out FROM third_input;"
+        });
+
+        var args = new[]
+        {
+            "--query", sql,
+            "--output", "out=-"
+        };
+
+        var previousError = Console.Error;
+        var errorWriter = new StringWriter();
+        Console.SetError(errorWriter);
+
+        try
+        {
+            var exitCode = await Program.Main(args);
+            Assert.Equal(1, exitCode);
+            Assert.Contains("cannot share output 'out' with a UNION", errorWriter.ToString());
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+    }
+
+    [Fact]
+    public async Task FailsUnionWithOrderBy()
+    {
+        var sql = "SELECT data.value AS v INTO out FROM first_input UNION ALL SELECT data.value AS v FROM second_input ORDER BY v;";
+        var args = new[]
+        {
+            "--query", sql,
+            "--output", "out=-"
+        };
+
+        var previousError = Console.Error;
+        var errorWriter = new StringWriter();
+        Console.SetError(errorWriter);
+
+        try
+        {
+            var exitCode = await Program.Main(args);
+            Assert.Equal(1, exitCode);
+            Assert.Contains("ORDER BY is not supported with UNION", errorWriter.ToString());
         }
         finally
         {

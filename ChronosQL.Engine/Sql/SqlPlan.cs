@@ -8,7 +8,9 @@ public sealed record SqlScriptPlan(
 
 public sealed record SqlPlan(
     string RawSql,
-    string? InputStream,
+    IReadOnlyList<InputSourceDefinition> Inputs,
+    JoinDefinition? Join,
+    UnionDefinition? Union,
     string? OutputStream,
     TimestampByDefinition? TimestampBy,
     IReadOnlyList<SelectItem> SelectItems,
@@ -26,6 +28,18 @@ public enum SelectItemKind
     Field,
     Aggregate
 }
+
+public sealed record InputSourceDefinition(string Name, string? Alias);
+
+public sealed record JoinDefinition(
+    InputSourceDefinition LeftSource,
+    InputSourceDefinition RightSource,
+    FieldReference LeftKey,
+    FieldReference RightKey);
+
+public sealed record UnionDefinition(
+    bool Distinct,
+    IReadOnlyList<SqlPlan> Branches);
 
 public sealed record FieldReference(IReadOnlyList<string> PathSegments);
 
