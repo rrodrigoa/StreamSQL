@@ -58,6 +58,17 @@ public static class SqlParser
         return scriptPlan.Statements[0];
     }
 
+    private static string GetSchemaObjectName(SchemaObjectName name)
+    {
+        if (name == null || name.Identifiers.Count == 0)
+        {
+            throw new InvalidOperationException("Invalid schema object name.");
+        }
+
+        // Ex: dbo.orders_out OR orders_out
+        return string.Join(".", name.Identifiers.Select(id => id.Value));
+    }
+
     public static SqlPlan Parse(SelectStatement selectStatement)
     {
         var visitor = new SqlValidationVisitor();
