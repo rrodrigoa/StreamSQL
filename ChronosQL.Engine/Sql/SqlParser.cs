@@ -344,6 +344,10 @@ public static class SqlParser
                     TimestampBy = timestampBy;
                 }
             }
+            else if (TimestampBy is null && InputSources.Count == 1 && InputSources[0].TimestampBy is not null)
+            {
+                TimestampBy = InputSources[0].TimestampBy;
+            }
 
             if (node.WhereClause is not null)
             {
@@ -523,14 +527,14 @@ public static class SqlParser
                     return false;
                 }
 
-                if (!TryBuildJoinKeys(qualifiedJoin.SearchCondition, leftSource, rightSource, out var leftKey, out var rightKey, out error))
+                if (!TryBuildJoinKeys(qualifiedJoin.SearchCondition, leftSource, rightSource, out var leftKey, out var rightKey, out var temporalConstraint, out error))
                 {
                     return false;
                 }
 
                 inputSources.Add(leftSource);
                 inputSources.Add(rightSource);
-                join = new JoinDefinition(leftSource, rightSource, leftKey, rightKey);
+                join = new JoinDefinition(leftSource, rightSource, leftKey, rightKey, temporalConstraint);
                 return true;
             }
 
@@ -554,7 +558,18 @@ public static class SqlParser
             }
 
             var alias = reference.Alias?.Value;
-            source = new InputSourceDefinition(name, alias);
+            source = new InputSourceDefinition(name, alias, null);
+
+            if (TryGetTimestampByExpression(reference, out var timestampExpression))
+            {
+                if (!TryBuildTimestampBy(timestampExpression, new[] { source }, out var timestampBy, out error))
+                {
+                    return false;
+                }
+
+                source = source with { TimestampBy = timestampBy };
+            }
+
             return true;
         }
 
@@ -562,6 +577,71 @@ public static class SqlParser
             string.IsNullOrWhiteSpace(source.Alias) ? source.Name : source.Alias;
 
         private static bool TryBuildJoinKeys(
+            BooleanExpression? condition,
+            InputSourceDefinition leftSource,
+            InputSourceDefinition rightSource,
+            out FieldReference leftKey,
+            out FieldReference rightKey,
+            out TemporalJoinConstraint? temporalConstraint,
+            out string? error)
+        {
+            leftKey = default!;
+            rightKey = default!;
+            temporalConstraint = null;
+            error = null;
+
+            if (TryBuildJoinEquality(condition, leftSource, rightSource, out leftKey, out rightKey, out error))
+            {
+                return true;
+            }
+
+            if (condition is not BooleanBinaryExpression binary)
+            {
+                error ??= "JOIN ON requires an equality predicate.";
+                return false;
+            }
+
+            if (binary.BinaryExpressionType != BooleanBinaryExpressionType.And)
+            {
+                error = "JOIN ON only supports AND between equality and DATEDIFF.";
+                return false;
+            }
+
+            if (binary.FirstExpression is BooleanBinaryExpression || binary.SecondExpression is BooleanBinaryExpression)
+            {
+                error = "JOIN ON supports only one equality predicate and one DATEDIFF predicate.";
+                return false;
+            }
+
+            if (TryBuildJoinEquality(binary.FirstExpression, leftSource, rightSource, out leftKey, out rightKey, out var equalityError) &&
+                TryBuildTemporalConstraint(binary.SecondExpression, leftSource, rightSource, out temporalConstraint, out var temporalError))
+            {
+                return true;
+            }
+
+            if (TryBuildJoinEquality(binary.SecondExpression, leftSource, rightSource, out leftKey, out rightKey, out equalityError) &&
+                TryBuildTemporalConstraint(binary.FirstExpression, leftSource, rightSource, out temporalConstraint, out temporalError))
+            {
+                return true;
+            }
+
+            if (equalityError is not null || temporalError is not null)
+            {
+                error = equalityError ?? temporalError;
+                return false;
+            }
+
+            error = "JOIN ON requires an equality predicate.";
+            return false;
+        }
+
+        private enum JoinSide
+        {
+            Left,
+            Right
+        }
+
+        private static bool TryBuildJoinEquality(
             BooleanExpression? condition,
             InputSourceDefinition leftSource,
             InputSourceDefinition rightSource,
@@ -617,10 +697,99 @@ public static class SqlParser
             return true;
         }
 
-        private enum JoinSide
+        private static bool TryBuildTemporalConstraint(
+            BooleanExpression? condition,
+            InputSourceDefinition leftSource,
+            InputSourceDefinition rightSource,
+            out TemporalJoinConstraint temporalConstraint,
+            out string? error)
         {
-            Left,
-            Right
+            temporalConstraint = default!;
+            error = null;
+
+            if (condition is not BooleanTernaryExpression ternary ||
+                ternary.TernaryExpressionType != BooleanTernaryExpressionType.Between)
+            {
+                error = "JOIN ON requires a DATEDIFF predicate when using temporal joins.";
+                return false;
+            }
+
+            if (ternary.FirstExpression is not FunctionCall functionCall ||
+                !functionCall.FunctionName.Value.Equals("DATEDIFF", StringComparison.OrdinalIgnoreCase))
+            {
+                error = "DATEDIFF must be used in JOIN ON as a BETWEEN predicate.";
+                return false;
+            }
+
+            if (functionCall.Parameters.Count != 3)
+            {
+                error = "DATEDIFF expects (time_unit, left_alias, right_alias).";
+                return false;
+            }
+
+            if (!TryGetTimeUnit(functionCall.Parameters[0], out var unit, out error))
+            {
+                return false;
+            }
+
+            if (!TryGetJoinAlias(functionCall.Parameters[1], leftSource, out var leftAliasError))
+            {
+                error = leftAliasError ?? "DATEDIFF requires the left source alias as the second argument.";
+                return false;
+            }
+
+            if (!TryGetJoinAlias(functionCall.Parameters[2], rightSource, out var rightAliasError))
+            {
+                error = rightAliasError ?? "DATEDIFF requires the right source alias as the third argument.";
+                return false;
+            }
+
+            if (!TryGetIntegerLiteral(ternary.SecondExpression, out var minDelta) ||
+                !TryGetIntegerLiteral(ternary.ThirdExpression, out var maxDelta))
+            {
+                error = "DATEDIFF BETWEEN requires constant integer bounds.";
+                return false;
+            }
+
+            if (minDelta > maxDelta)
+            {
+                error = "DATEDIFF BETWEEN requires min to be less than or equal to max.";
+                return false;
+            }
+
+            if (leftSource.TimestampBy is null || rightSource.TimestampBy is null)
+            {
+                error = "JOIN with DATEDIFF requires TIMESTAMP BY on both inputs.";
+                return false;
+            }
+
+            temporalConstraint = new TemporalJoinConstraint(unit, minDelta, maxDelta);
+            return true;
+        }
+
+        private static bool TryGetJoinAlias(
+            ScalarExpression expression,
+            InputSourceDefinition source,
+            out string? error)
+        {
+            error = null;
+
+            if (expression is not ColumnReferenceExpression column ||
+                column.MultiPartIdentifier?.Identifiers is null ||
+                column.MultiPartIdentifier.Identifiers.Count != 1)
+            {
+                error = "DATEDIFF requires source aliases as arguments.";
+                return false;
+            }
+
+            var identifier = column.MultiPartIdentifier.Identifiers[0].Value;
+            if (!MatchesSource(identifier, source))
+            {
+                error = $"DATEDIFF references unknown input '{identifier}'.";
+                return false;
+            }
+
+            return true;
         }
 
         private static bool TryBuildJoinKey(
@@ -767,9 +936,15 @@ public static class SqlParser
         private static bool TryGetTimestampByExpression(QuerySpecification node, out ScalarExpression expression)
         {
             expression = null!;
+            return TryGetTimestampByExpression((object)node, out expression);
+        }
 
-            var clauseProperty = node.GetType().GetProperty("TimestampByClause");
-            if (clauseProperty?.GetValue(node) is not object clause)
+        private static bool TryGetTimestampByExpression(object clauseOwner, out ScalarExpression expression)
+        {
+            expression = null!;
+
+            var clauseProperty = clauseOwner.GetType().GetProperty("TimestampByClause");
+            if (clauseProperty?.GetValue(clauseOwner) is not object clause)
             {
                 return false;
             }
@@ -1490,6 +1665,37 @@ public static class SqlParser
                 numericValue > 0)
             {
                 value = numericValue;
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryGetIntegerLiteral(ScalarExpression expression, out long value)
+        {
+            value = 0;
+            var unwrapped = UnwrapParentheses(expression);
+
+            if (unwrapped is IntegerLiteral integerLiteral &&
+                long.TryParse(integerLiteral.Value, out var integerValue))
+            {
+                value = integerValue;
+                return true;
+            }
+
+            if (unwrapped is NumericLiteral numericLiteral &&
+                long.TryParse(numericLiteral.Value, out var numericValue))
+            {
+                value = numericValue;
+                return true;
+            }
+
+            if (unwrapped is UnaryExpression unary &&
+                unary.UnaryExpressionType == UnaryExpressionType.Negative &&
+                unary.Expression is IntegerLiteral negativeLiteral &&
+                long.TryParse(negativeLiteral.Value, out var negativeValue))
+            {
+                value = -negativeValue;
                 return true;
             }
 

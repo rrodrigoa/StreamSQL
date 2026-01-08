@@ -29,13 +29,16 @@ public enum SelectItemKind
     Aggregate
 }
 
-public sealed record InputSourceDefinition(string Name, string? Alias);
+public sealed record InputSourceDefinition(string Name, string? Alias, TimestampByDefinition? TimestampBy);
 
 public sealed record JoinDefinition(
     InputSourceDefinition LeftSource,
     InputSourceDefinition RightSource,
     FieldReference LeftKey,
-    FieldReference RightKey);
+    FieldReference RightKey,
+    TemporalJoinConstraint? TemporalConstraint);
+
+public sealed record TemporalJoinConstraint(TimeSpan Unit, long MinDelta, long MaxDelta);
 
 public sealed record UnionDefinition(
     bool Distinct,
