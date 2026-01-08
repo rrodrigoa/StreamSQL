@@ -314,6 +314,29 @@ public sealed class StreamExecutionEngine
         var joinChannel = Channel.CreateUnbounded<(JoinSide Side, InputEvent Event)>();
         var leftBuffer = new Dictionary<string, List<InputEvent>>(StringComparer.Ordinal);
         var rightBuffer = new Dictionary<string, List<InputEvent>>(StringComparer.Ordinal);
+        var temporalConstraint = node.Join.TemporalConstraint;
+        var leftTimestampBy = node.Join.LeftSource.TimestampBy;
+        var rightTimestampBy = node.Join.RightSource.TimestampBy;
+        var minDeltaMs = 0L;
+        var maxDeltaMs = 0L;
+        var maxSpanMs = 0L;
+        var leftMaxTimestamp = 0L;
+        var rightMaxTimestamp = 0L;
+        var hasLeftMax = false;
+        var hasRightMax = false;
+
+        if (temporalConstraint is not null)
+        {
+            if (leftTimestampBy is null || rightTimestampBy is null)
+            {
+                throw new InvalidOperationException($"JOIN '{node.Name}' is missing TIMESTAMP BY definitions.");
+            }
+
+            var unitMs = temporalConstraint.Unit.Ticks / TimeSpan.TicksPerMillisecond;
+            minDeltaMs = checked(unitMs * temporalConstraint.MinDelta);
+            maxDeltaMs = checked(unitMs * temporalConstraint.MaxDelta);
+            maxSpanMs = Math.Max(Math.Abs(minDeltaMs), Math.Abs(maxDeltaMs));
+        }
 
         async Task PumpAsync(ChannelReader<InputEvent> reader, JoinSide side)
         {
@@ -342,6 +365,16 @@ public sealed class StreamExecutionEngine
                     continue;
                 }
 
+                if (temporalConstraint is not null)
+                {
+                    var timestampBy = side == JoinSide.Left ? leftTimestampBy : rightTimestampBy;
+                    var resolvedTimestamp = TimestampResolver.ResolveTimestamp(
+                        inputEvent.Payload,
+                        inputEvent.ArrivalTime,
+                        timestampBy);
+                    inputEvent = new InputEvent(inputEvent.Payload, resolvedTimestamp);
+                }
+
                 var buffer = side == JoinSide.Left ? leftBuffer : rightBuffer;
                 if (!buffer.TryGetValue(joinKey, out var events))
                 {
@@ -350,6 +383,22 @@ public sealed class StreamExecutionEngine
                 }
 
                 events.Add(inputEvent);
+
+                if (temporalConstraint is not null)
+                {
+                    if (side == JoinSide.Left)
+                    {
+                        leftMaxTimestamp = hasLeftMax ? Math.Max(leftMaxTimestamp, inputEvent.ArrivalTime) : inputEvent.ArrivalTime;
+                        hasLeftMax = true;
+                        ExpireOldEvents(leftBuffer, leftMaxTimestamp - maxSpanMs);
+                    }
+                    else
+                    {
+                        rightMaxTimestamp = hasRightMax ? Math.Max(rightMaxTimestamp, inputEvent.ArrivalTime) : inputEvent.ArrivalTime;
+                        hasRightMax = true;
+                        ExpireOldEvents(rightBuffer, rightMaxTimestamp - maxSpanMs);
+                    }
+                }
 
                 var probe = side == JoinSide.Left ? rightBuffer : leftBuffer;
                 if (!probe.TryGetValue(joinKey, out var matches))
@@ -361,6 +410,15 @@ public sealed class StreamExecutionEngine
                 {
                     var leftEvent = side == JoinSide.Left ? inputEvent : match;
                     var rightEvent = side == JoinSide.Left ? match : inputEvent;
+                    if (temporalConstraint is not null)
+                    {
+                        var deltaMs = rightEvent.ArrivalTime - leftEvent.ArrivalTime;
+                        if (deltaMs < minDeltaMs || deltaMs > maxDeltaMs)
+                        {
+                            continue;
+                        }
+                    }
+
                     var payload = BuildJoinPayload(node.Join, leftEvent.Payload, rightEvent.Payload);
                     var timestamp = Math.Max(leftEvent.ArrivalTime, rightEvent.ArrivalTime);
                     await runtime.Hub.BroadcastAsync(new InputEvent(payload, timestamp), cancellationToken);
@@ -549,6 +607,25 @@ public sealed class StreamExecutionEngine
 
     private static bool MatchesJoinInput(string upstreamName, string joinName) =>
         upstreamName.Equals(joinName, StringComparison.OrdinalIgnoreCase);
+
+    private static void ExpireOldEvents(Dictionary<string, List<InputEvent>> buffer, long cutoffTimestamp)
+    {
+        var expiredKeys = new List<string>();
+
+        foreach (var (key, events) in buffer)
+        {
+            events.RemoveAll(item => item.ArrivalTime < cutoffTimestamp);
+            if (events.Count == 0)
+            {
+                expiredKeys.Add(key);
+            }
+        }
+
+        foreach (var key in expiredKeys)
+        {
+            buffer.Remove(key);
+        }
+    }
 
     private static bool TryGetJoinKey(JsonElement payload, FieldReference key, out string joinKey)
     {
