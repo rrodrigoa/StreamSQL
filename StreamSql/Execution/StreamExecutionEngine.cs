@@ -312,21 +312,19 @@ public sealed class StreamExecutionEngine
         }
 
         var joinChannel = Channel.CreateUnbounded<(JoinSide Side, InputEvent Event)>();
-        var leftBuffer = new Dictionary<string, List<InputEvent>>(StringComparer.Ordinal);
-        var rightBuffer = new Dictionary<string, List<InputEvent>>(StringComparer.Ordinal);
+        var leftBuffer = new Dictionary<string, List<JoinBufferEvent>>(StringComparer.Ordinal);
+        var rightBuffer = new Dictionary<string, List<JoinBufferEvent>>(StringComparer.Ordinal);
         var temporalConstraint = node.Join.TemporalConstraint;
         var leftTimestampBy = node.Join.LeftSource.TimestampBy;
         var rightTimestampBy = node.Join.RightSource.TimestampBy;
-        var minBucketDelta = 0L;
-        var maxBucketDelta = 0L;
-        var maxBucketSpan = 0L;
         var unitMs = 0L;
-        var leftMaxTimestamp = 0L;
-        var rightMaxTimestamp = 0L;
-        var leftMaxBucket = 0L;
-        var rightMaxBucket = 0L;
+        var minOffset = 0L;
+        var maxOffset = 0L;
+        var leftMaxExpandedStart = 0L;
+        var rightMaxStart = 0L;
         var hasLeftMax = false;
         var hasRightMax = false;
+        const long MinimumEventDurationMs = 1L;
 
         if (temporalConstraint is not null)
         {
@@ -336,9 +334,8 @@ public sealed class StreamExecutionEngine
             }
 
             unitMs = temporalConstraint.Unit.Ticks / TimeSpan.TicksPerMillisecond;
-            minBucketDelta = temporalConstraint.MinDelta;
-            maxBucketDelta = temporalConstraint.MaxDelta;
-            maxBucketSpan = Math.Max(Math.Abs(minBucketDelta), Math.Abs(maxBucketDelta));
+            minOffset = temporalConstraint.MinDelta;
+            maxOffset = temporalConstraint.MaxDelta;
         }
 
         async Task PumpAsync(ChannelReader<InputEvent> reader, JoinSide side)
@@ -381,27 +378,49 @@ public sealed class StreamExecutionEngine
                 var buffer = side == JoinSide.Left ? leftBuffer : rightBuffer;
                 if (!buffer.TryGetValue(joinKey, out var events))
                 {
-                    events = new List<InputEvent>();
+                    events = new List<JoinBufferEvent>();
                     buffer[joinKey] = events;
                 }
 
-                events.Add(inputEvent);
+                var bufferEvent = CreateJoinBufferEvent(
+                    inputEvent,
+                    side,
+                    temporalConstraint is not null,
+                    unitMs,
+                    minOffset,
+                    maxOffset,
+                    MinimumEventDurationMs);
+                events.Add(bufferEvent);
 
                 if (temporalConstraint is not null)
                 {
                     if (side == JoinSide.Left)
                     {
-                        leftMaxTimestamp = hasLeftMax ? Math.Max(leftMaxTimestamp, inputEvent.ArrivalTime) : inputEvent.ArrivalTime;
-                        leftMaxBucket = GetBucketIndex(leftMaxTimestamp, unitMs);
+                        leftMaxExpandedStart = hasLeftMax
+                            ? Math.Max(leftMaxExpandedStart, bufferEvent.Start)
+                            : bufferEvent.Start;
                         hasLeftMax = true;
-                        ExpireOldEvents(leftBuffer, leftMaxBucket - maxBucketSpan, unitMs);
+
+                        if (hasRightMax)
+                        {
+                            ExpireEvents(leftBuffer, item => item.End <= rightMaxStart);
+                        }
+
+                        ExpireEvents(rightBuffer, item => item.Start < leftMaxExpandedStart);
                     }
                     else
                     {
-                        rightMaxTimestamp = hasRightMax ? Math.Max(rightMaxTimestamp, inputEvent.ArrivalTime) : inputEvent.ArrivalTime;
-                        rightMaxBucket = GetBucketIndex(rightMaxTimestamp, unitMs);
+                        rightMaxStart = hasRightMax
+                            ? Math.Max(rightMaxStart, bufferEvent.Start)
+                            : bufferEvent.Start;
                         hasRightMax = true;
-                        ExpireOldEvents(rightBuffer, rightMaxBucket - maxBucketSpan, unitMs);
+
+                        ExpireEvents(leftBuffer, item => item.End <= rightMaxStart);
+
+                        if (hasLeftMax)
+                        {
+                            ExpireEvents(rightBuffer, item => item.Start < leftMaxExpandedStart);
+                        }
                     }
                 }
 
@@ -413,22 +432,21 @@ public sealed class StreamExecutionEngine
 
                 foreach (var match in matches)
                 {
-                    var leftEvent = side == JoinSide.Left ? inputEvent : match;
-                    var rightEvent = side == JoinSide.Left ? match : inputEvent;
+                    var leftEvent = side == JoinSide.Left ? bufferEvent : match;
+                    var rightEvent = side == JoinSide.Left ? match : bufferEvent;
                     if (temporalConstraint is not null)
                     {
-                        var leftBucket = GetBucketIndex(leftEvent.ArrivalTime, unitMs);
-                        var rightBucket = GetBucketIndex(rightEvent.ArrivalTime, unitMs);
-                        var bucketDelta = Math.Abs(leftBucket - rightBucket);
-                        if (bucketDelta < minBucketDelta || bucketDelta > maxBucketDelta)
+                        if (rightEvent.Start < leftEvent.Start || rightEvent.Start >= leftEvent.End)
                         {
                             continue;
                         }
                     }
 
-                    var payload = BuildJoinPayload(node.Join, leftEvent.Payload, rightEvent.Payload);
-                    var timestamp = Math.Max(leftEvent.ArrivalTime, rightEvent.ArrivalTime);
-                    await runtime.Hub.BroadcastAsync(new InputEvent(payload, timestamp), cancellationToken);
+                    var payload = BuildJoinPayload(node.Join, leftEvent.Event.Payload, rightEvent.Event.Payload);
+                    var outputTimestamp = temporalConstraint is null
+                        ? Math.Max(leftEvent.Event.ArrivalTime, rightEvent.Event.ArrivalTime)
+                        : Math.Max(leftEvent.Start, rightEvent.Start);
+                    await runtime.Hub.BroadcastAsync(new InputEvent(payload, outputTimestamp), cancellationToken);
                 }
             }
 
@@ -615,13 +633,41 @@ public sealed class StreamExecutionEngine
     private static bool MatchesJoinInput(string upstreamName, string joinName) =>
         upstreamName.Equals(joinName, StringComparison.OrdinalIgnoreCase);
 
-    private static void ExpireOldEvents(Dictionary<string, List<InputEvent>> buffer, long cutoffBucket, long unitMs)
+    private static JoinBufferEvent CreateJoinBufferEvent(
+        InputEvent inputEvent,
+        JoinSide side,
+        bool temporalJoin,
+        long unitMs,
+        long minOffset,
+        long maxOffset,
+        long minimumDurationMs)
+    {
+        if (!temporalJoin)
+        {
+            var start = inputEvent.ArrivalTime;
+            return new JoinBufferEvent(inputEvent, start, start + minimumDurationMs);
+        }
+
+        if (side == JoinSide.Left)
+        {
+            var expandedStart = inputEvent.ArrivalTime + (minOffset * unitMs);
+            var expandedEnd = inputEvent.ArrivalTime + ((maxOffset + 1) * unitMs);
+            return new JoinBufferEvent(inputEvent, expandedStart, expandedEnd);
+        }
+
+        var rightStart = inputEvent.ArrivalTime;
+        return new JoinBufferEvent(inputEvent, rightStart, rightStart + minimumDurationMs);
+    }
+
+    private static void ExpireEvents(
+        Dictionary<string, List<JoinBufferEvent>> buffer,
+        Func<JoinBufferEvent, bool> shouldExpire)
     {
         var expiredKeys = new List<string>();
 
         foreach (var (key, events) in buffer)
         {
-            events.RemoveAll(item => GetBucketIndex(item.ArrivalTime, unitMs) < cutoffBucket);
+            events.RemoveAll(item => shouldExpire(item));
             if (events.Count == 0)
             {
                 expiredKeys.Add(key);
@@ -632,16 +678,6 @@ public sealed class StreamExecutionEngine
         {
             buffer.Remove(key);
         }
-    }
-
-    private static long GetBucketIndex(long timestamp, long unitMs)
-    {
-        if (unitMs <= 0)
-        {
-            return 0L;
-        }
-
-        return timestamp / unitMs;
     }
 
     private static bool TryGetJoinKey(JsonElement payload, FieldReference key, out string joinKey)
@@ -706,4 +742,6 @@ public sealed class StreamExecutionEngine
         Left,
         Right
     }
+
+    private readonly record struct JoinBufferEvent(InputEvent Event, long Start, long End);
 }
