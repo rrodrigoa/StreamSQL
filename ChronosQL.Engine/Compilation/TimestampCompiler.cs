@@ -1,50 +1,52 @@
 using System.Text.Json;
 using ChronosQL.Engine.Sql;
 
-namespace ChronosQL.Engine;
+namespace ChronosQL.Engine.Compilation;
 
-public static class TimestampResolver
+public static class TimestampCompiler
 {
-    public static long ResolveTimestamp(JsonElement element, long arrivalTime, TimestampByDefinition? timestampBy)
+    public static ResolveTimestampDelegate? Compile(TimestampByDefinition? timestampBy)
     {
         if (timestampBy is null)
         {
-            return arrivalTime;
+            return null;
         }
 
-        if (TryResolveTimestamp(element, timestampBy.Expression, out var resolved, out var error))
+        return timestampBy.Expression switch
         {
-            return resolved;
+            TimestampFieldExpression fieldExpression => CompileFieldTimestamp(fieldExpression.Field),
+            TimestampLiteralExpression literalExpression => CompileLiteralTimestamp(literalExpression.Value),
+            _ => throw new InvalidOperationException("Unsupported TIMESTAMP BY expression.")
+        };
+    }
+
+    private static ResolveTimestampDelegate CompileFieldTimestamp(FieldReference field)
+    {
+        var segments = field.PathSegments.ToArray();
+        return (JsonElement payload, long arrivalTime) =>
+        {
+            if (!TryGetProperty(payload, segments, out var value))
+            {
+                throw new InvalidOperationException($"TIMESTAMP BY field '{string.Join('.', segments)}' was not found.");
+            }
+
+            if (TryParseTimestampValue(value, out var timestamp, out var error))
+            {
+                return timestamp;
+            }
+
+            throw new InvalidOperationException(error ?? "TIMESTAMP BY expression did not evaluate to a valid timestamp.");
+        };
+    }
+
+    private static ResolveTimestampDelegate CompileLiteralTimestamp(FilterValue literal)
+    {
+        if (TryParseTimestampLiteral(literal, out var timestamp, out var error))
+        {
+            return (_, _) => timestamp;
         }
 
         throw new InvalidOperationException(error ?? "TIMESTAMP BY expression did not evaluate to a valid timestamp.");
-    }
-
-    public static bool TryResolveTimestamp(
-        JsonElement element,
-        TimestampExpression expression,
-        out long timestamp,
-        out string? error)
-    {
-        timestamp = 0;
-        error = null;
-
-        switch (expression)
-        {
-            case TimestampFieldExpression fieldExpression:
-                if (!TrillPipelineBuilder.TryGetProperty(element, fieldExpression.Field.PathSegments, out var value))
-                {
-                    error = $"TIMESTAMP BY field '{string.Join('.', fieldExpression.Field.PathSegments)}' was not found.";
-                    return false;
-                }
-
-                return TryParseTimestampValue(value, out timestamp, out error);
-            case TimestampLiteralExpression literalExpression:
-                return TryParseTimestampLiteral(literalExpression.Value, out timestamp, out error);
-            default:
-                error = "Unsupported TIMESTAMP BY expression.";
-                return false;
-        }
     }
 
     private static bool TryParseTimestampLiteral(FilterValue literal, out long timestamp, out string? error)
@@ -119,5 +121,22 @@ public static class TimestampResolver
     {
         error = message;
         return false;
+    }
+
+    private static bool TryGetProperty(JsonElement payload, IReadOnlyList<string> pathSegments, out JsonElement value)
+    {
+        value = payload;
+
+        foreach (var segment in pathSegments)
+        {
+            if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(segment, out var next))
+            {
+                return false;
+            }
+
+            value = next;
+        }
+
+        return true;
     }
 }

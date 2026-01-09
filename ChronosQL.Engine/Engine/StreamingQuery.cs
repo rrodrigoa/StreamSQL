@@ -1,24 +1,25 @@
 using System.Text.Json;
 using System.Threading.Channels;
+using ChronosQL.Engine.Compilation;
 
 namespace ChronosQL.Engine;
 
 public sealed class StreamingQuery : IAsyncDisposable
 {
     private readonly Channel<InputEvent> _channel;
-    private readonly TrillPipelineBuilder _pipeline;
+    private readonly CompiledQuery _compiledQuery;
     private readonly ChannelReader<InputEvent> _reader;
 
-    internal StreamingQuery(TrillPipelineBuilder pipeline)
+    internal StreamingQuery(CompiledQuery compiledQuery)
     {
-        _pipeline = pipeline;
+        _compiledQuery = compiledQuery;
         _channel = Channel.CreateUnbounded<InputEvent>(new UnboundedChannelOptions
         {
             SingleReader = true,
             SingleWriter = false
         });
         _reader = _channel.Reader;
-        Results = _pipeline.ExecuteAsync(_reader.ReadAllAsync());
+        Results = _compiledQuery.ExecuteAsync(_reader.ReadAllAsync());
     }
 
     public IAsyncEnumerable<JsonElement> Results { get; }

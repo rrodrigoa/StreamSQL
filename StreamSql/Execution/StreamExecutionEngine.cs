@@ -1,4 +1,5 @@
 using ChronosQL.Engine;
+using ChronosQL.Engine.Compilation;
 using ChronosQL.Engine.Sql;
 using Microsoft.StreamProcessing;
 using StreamSql.Cli;
@@ -34,6 +35,7 @@ public sealed class StreamExecutionEngine
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var runtime = BuildRuntime(graphPlan);
+        PrepareCompiledRuntime(graphPlan, runtime);
 
         var outputStreams = new Dictionary<string, Stream>(StringComparer.OrdinalIgnoreCase);
         var outputWriters = new Dictionary<string, JsonLineWriter>(StringComparer.OrdinalIgnoreCase);
@@ -219,6 +221,25 @@ public sealed class StreamExecutionEngine
         return runtime;
     }
 
+    private void PrepareCompiledRuntime(StreamGraphPlan graphPlan, Dictionary<StreamNodePlan, NodeRuntime> runtime)
+    {
+        foreach (var withNode in graphPlan.WithNodes)
+        {
+            runtime[withNode].Query = _engine.Compile(withNode.Plan);
+            runtime[withNode].TimestampResolver = TimestampCompiler.Compile(withNode.Plan.TimestampBy);
+        }
+
+        foreach (var selectNode in graphPlan.SelectNodes)
+        {
+            runtime[selectNode].Query = _engine.Compile(selectNode.Plan);
+        }
+
+        foreach (var joinNode in graphPlan.JoinNodes)
+        {
+            runtime[joinNode].CompiledJoin = JoinCompiler.Compile(joinNode.Join);
+        }
+    }
+
     private async Task RunSourceAsync(
         SourceNodePlan source,
         NodeRuntime runtime,
@@ -267,7 +288,12 @@ public sealed class StreamExecutionEngine
             return;
         }
 
-        await using var query = _engine.CreateStreamingQuery(node.Plan);
+        if (runtime.Query is null)
+        {
+            throw new InvalidOperationException($"WITH '{node.Name}' did not have a compiled query.");
+        }
+
+        await using var query = _engine.CreateStreamingQuery(runtime.Query);
         var lastTimestamp = 0L;
         var hasTimestamp = false;
 
@@ -284,11 +310,16 @@ public sealed class StreamExecutionEngine
         {
             await foreach (var inputEvent in runtime.Input.ReadAllAsync(cancellationToken))
             {
-                lastTimestamp = TimestampResolver.ResolveTimestamp(
-                    inputEvent.Payload,
-                    inputEvent.ArrivalTime,
-                    node.Plan.TimestampBy);
-                hasTimestamp = true;
+                if (runtime.TimestampResolver is not null)
+                {
+                    lastTimestamp = runtime.TimestampResolver(inputEvent.Payload, inputEvent.ArrivalTime);
+                    hasTimestamp = true;
+                }
+                else
+                {
+                    lastTimestamp = inputEvent.ArrivalTime;
+                    hasTimestamp = true;
+                }
                 await query.EnqueueAsync(inputEvent.Payload, inputEvent.ArrivalTime, cancellationToken);
             }
 
@@ -313,23 +344,26 @@ public sealed class StreamExecutionEngine
             return;
         }
 
-        var temporalConstraint = node.Join.TemporalConstraint;
-        var leftTimestampBy = node.Join.LeftSource.TimestampBy;
-        var rightTimestampBy = node.Join.RightSource.TimestampBy;
+        if (runtime.CompiledJoin is null)
+        {
+            throw new InvalidOperationException($"JOIN '{node.Name}' did not have a compiled definition.");
+        }
 
-        if (temporalConstraint is not null && (leftTimestampBy is null || rightTimestampBy is null))
+        var temporalConstraint = runtime.CompiledJoin.TemporalConstraint;
+
+        if (temporalConstraint is not null && (runtime.CompiledJoin.LeftTimestamp is null || runtime.CompiledJoin.RightTimestamp is null))
         {
             throw new InvalidOperationException($"JOIN '{node.Name}' is missing TIMESTAMP BY definitions.");
         }
 
         var leftObservable = CreateJoinObservable(
             runtime.LeftInput,
-            node.Join.LeftKey,
-            temporalConstraint is not null ? leftTimestampBy : null);
+            runtime.CompiledJoin.LeftKey,
+            temporalConstraint is not null ? runtime.CompiledJoin.LeftTimestamp : null);
         var rightObservable = CreateJoinObservable(
             runtime.RightInput,
-            node.Join.RightKey,
-            temporalConstraint is not null ? rightTimestampBy : null);
+            runtime.CompiledJoin.RightKey,
+            temporalConstraint is not null ? runtime.CompiledJoin.RightTimestamp : null);
 
         var leftStream = leftObservable.ToStreamable(
             DisorderPolicy.Throw(),
@@ -389,7 +423,7 @@ public sealed class StreamExecutionEngine
                         continue;
                     }
 
-                    var payload = BuildJoinPayload(node.Join, streamEvent.Payload.LeftPayload, streamEvent.Payload.RightPayload);
+                    var payload = BuildJoinPayload(runtime.CompiledJoin, streamEvent.Payload.LeftPayload, streamEvent.Payload.RightPayload);
                     var timestamp = temporalConstraint is null
                         ? streamEvent.StartTime
                         : streamEvent.EndTime;
@@ -459,7 +493,12 @@ public sealed class StreamExecutionEngine
             return;
         }
 
-        await using var query = _engine.CreateStreamingQuery(node.Plan);
+        if (runtime.Query is null)
+        {
+            throw new InvalidOperationException($"SELECT {node.Index} did not have a compiled query.");
+        }
+
+        await using var query = _engine.CreateStreamingQuery(runtime.Query);
 
         Exception? outputError = null;
         try
@@ -515,6 +554,9 @@ public sealed class StreamExecutionEngine
 
     private sealed class NodeRuntime
     {
+        public CompiledQuery? Query { get; set; }
+        public CompiledJoinDefinition? CompiledJoin { get; set; }
+        public ResolveTimestampDelegate? TimestampResolver { get; set; }
         public BroadcastHub<InputEvent>? Hub { get; set; }
         public ChannelReader<InputEvent>? Input { get; set; }
         public ChannelReader<InputEvent>? LeftInput { get; set; }
@@ -582,29 +624,13 @@ public sealed class StreamExecutionEngine
     private static bool MatchesJoinInput(string upstreamName, string joinName) =>
         upstreamName.Equals(joinName, StringComparison.OrdinalIgnoreCase);
 
-    private static bool TryGetJoinKey(JsonElement payload, FieldReference key, out string joinKey)
-    {
-        joinKey = string.Empty;
-        if (!TryGetProperty(payload, key.PathSegments, out var value))
-        {
-            return false;
-        }
-
-        joinKey = value.GetRawText();
-        return true;
-    }
-
     private static JsonElement BuildJoinPayload(
-        JoinDefinition join,
+        CompiledJoinDefinition join,
         JsonElement leftPayload,
         JsonElement rightPayload)
     {
-        var leftAlias = string.IsNullOrWhiteSpace(join.LeftSource.Alias)
-            ? join.LeftSource.Name
-            : join.LeftSource.Alias!;
-        var rightAlias = string.IsNullOrWhiteSpace(join.RightSource.Alias)
-            ? join.RightSource.Name
-            : join.RightSource.Alias!;
+        var leftAlias = join.LeftAlias;
+        var rightAlias = join.RightAlias;
 
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
@@ -622,27 +648,10 @@ public sealed class StreamExecutionEngine
         return document.RootElement.Clone();
     }
 
-    private static bool TryGetProperty(JsonElement payload, IReadOnlyList<string> pathSegments, out JsonElement value)
-    {
-        value = payload;
-
-        foreach (var segment in pathSegments)
-        {
-            if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(segment, out var next))
-            {
-                return false;
-            }
-
-            value = next;
-        }
-
-        return true;
-    }
-
     private static IObservable<StreamEvent<JoinInput>> CreateJoinObservable(
         ChannelReader<InputEvent> reader,
-        FieldReference keyReference,
-        TimestampByDefinition? timestampBy)
+        TryGetJoinKeyDelegate keyAccessor,
+        ResolveTimestampDelegate? timestampResolver)
     {
         return Observable.Create<StreamEvent<JoinInput>>(async (observer, ct) =>
         {
@@ -650,14 +659,14 @@ public sealed class StreamExecutionEngine
             {
                 await foreach (var inputEvent in reader.ReadAllAsync(ct))
                 {
-                    if (!TryGetJoinKey(inputEvent.Payload, keyReference, out var joinKey))
+                    if (!keyAccessor(inputEvent.Payload, out var joinKey))
                     {
                         continue;
                     }
 
-                    var timestamp = timestampBy is null
+                    var timestamp = timestampResolver is null
                         ? inputEvent.ArrivalTime
-                        : TimestampResolver.ResolveTimestamp(inputEvent.Payload, inputEvent.ArrivalTime, timestampBy);
+                        : timestampResolver(inputEvent.Payload, inputEvent.ArrivalTime);
                     var payload = new JoinInput(joinKey, inputEvent.Payload);
                     observer.OnNext(StreamEvent.CreatePoint(timestamp, payload));
                 }

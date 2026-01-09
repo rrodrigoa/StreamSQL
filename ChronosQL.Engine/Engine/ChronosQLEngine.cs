@@ -1,13 +1,17 @@
 using System.Text.Json;
+using ChronosQL.Engine.Compilation;
 using ChronosQL.Engine.Sql;
 
 namespace ChronosQL.Engine;
 
 public sealed class ChronosQLEngine
 {
+    private readonly QueryCompiler _compiler;
+
     public ChronosQLEngine(EngineExecutionOptions? options = null)
     {
         Options = options ?? new EngineExecutionOptions();
+        _compiler = new QueryCompiler();
     }
 
     public EngineExecutionOptions Options { get; }
@@ -30,11 +34,8 @@ public sealed class ChronosQLEngine
         IAsyncEnumerable<InputEvent> input,
         CancellationToken cancellationToken = default)
     {
-        var pipeline = new TrillPipelineBuilder(
-            Options.Follow,
-            plan);
-
-        return pipeline.ExecuteAsync(input, cancellationToken);
+        var compiled = _compiler.Compile(plan, Options.Follow);
+        return compiled.ExecuteAsync(input, cancellationToken);
     }
 
     public async Task<IReadOnlyList<JsonElement>> ExecuteBatchAsync(
@@ -122,12 +123,15 @@ public sealed class ChronosQLEngine
 
     public StreamingQuery CreateStreamingQuery(SqlPlan plan)
     {
-        var pipeline = new TrillPipelineBuilder(
-            Options.Follow,
-            plan);
-
-        return new StreamingQuery(pipeline);
+        var compiled = _compiler.Compile(plan, Options.Follow);
+        return new StreamingQuery(compiled);
     }
+
+    public CompiledQuery Compile(SqlPlan plan)
+        => _compiler.Compile(plan, Options.Follow);
+
+    public StreamingQuery CreateStreamingQuery(CompiledQuery compiledQuery)
+        => new StreamingQuery(compiledQuery);
 
     private static async IAsyncEnumerable<InputEvent> ToAsyncEnumerable(
         IEnumerable<InputEvent> input,

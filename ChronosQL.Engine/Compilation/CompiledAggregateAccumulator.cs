@@ -1,26 +1,24 @@
-using System;
 using System.Text.Json;
-using ChronosQL.Engine.Sql;
 
-namespace ChronosQL.Engine;
+namespace ChronosQL.Engine.Compilation;
 
-internal sealed class AggregateAccumulator
+internal sealed class CompiledAggregateAccumulator
 {
-    private readonly AggregateDefinition _definition;
+    private readonly CompiledAggregateDefinition _definition;
     private double _sum;
     private double _min;
     private double _max;
     private long _count;
     private bool _hasValue;
 
-    public AggregateAccumulator(AggregateDefinition definition)
+    public CompiledAggregateAccumulator(CompiledAggregateDefinition definition)
     {
         _definition = definition;
     }
 
     public void Accumulate(JsonElement payload)
     {
-        if (_definition.Type == AggregateType.Count)
+        if (_definition.Type == CompiledAggregateType.Count)
         {
             if (_definition.CountAll)
             {
@@ -28,13 +26,12 @@ internal sealed class AggregateAccumulator
                 return;
             }
 
-            if (_definition.Field is null)
+            if (_definition.HasValue is null)
             {
                 return;
             }
 
-            if (TrillPipelineBuilder.TryGetProperty(payload, _definition.Field.PathSegments, out var property) &&
-                property.ValueKind != JsonValueKind.Null)
+            if (_definition.HasValue(payload))
             {
                 _count++;
             }
@@ -42,12 +39,12 @@ internal sealed class AggregateAccumulator
             return;
         }
 
-        if (_definition.Field is null)
+        if (_definition.NumericGetter is null)
         {
             return;
         }
 
-        if (!TrillPipelineBuilder.TryGetNumericValue(payload, _definition.Field.PathSegments, out var numeric))
+        if (!_definition.NumericGetter(payload, out var numeric))
         {
             return;
         }
@@ -71,13 +68,13 @@ internal sealed class AggregateAccumulator
     {
         switch (_definition.Type)
         {
-            case AggregateType.Count:
+            case CompiledAggregateType.Count:
                 writer.WriteNumberValue(_count);
                 return;
-            case AggregateType.Sum:
+            case CompiledAggregateType.Sum:
                 writer.WriteNumberValue(_sum);
                 return;
-            case AggregateType.Avg:
+            case CompiledAggregateType.Avg:
                 if (_count == 0)
                 {
                     writer.WriteNullValue();
@@ -87,7 +84,7 @@ internal sealed class AggregateAccumulator
                     writer.WriteNumberValue(_sum / _count);
                 }
                 return;
-            case AggregateType.Min:
+            case CompiledAggregateType.Min:
                 if (!_hasValue)
                 {
                     writer.WriteNullValue();
@@ -97,7 +94,7 @@ internal sealed class AggregateAccumulator
                     writer.WriteNumberValue(_min);
                 }
                 return;
-            case AggregateType.Max:
+            case CompiledAggregateType.Max:
                 if (!_hasValue)
                 {
                     writer.WriteNullValue();
@@ -110,34 +107,37 @@ internal sealed class AggregateAccumulator
         }
     }
 
-    public FilterValue GetFilterValue()
+    public CompiledFilterValue GetFilterValue()
     {
         switch (_definition.Type)
         {
-            case AggregateType.Count:
-                return new FilterValue(FilterValueKind.Number, _count, string.Empty);
-            case AggregateType.Sum:
-                return new FilterValue(FilterValueKind.Number, _sum, string.Empty);
-            case AggregateType.Avg:
+            case CompiledAggregateType.Count:
+                return new CompiledFilterValue(CompiledFilterValueKind.Number, _count, string.Empty);
+            case CompiledAggregateType.Sum:
+                return new CompiledFilterValue(CompiledFilterValueKind.Number, _sum, string.Empty);
+            case CompiledAggregateType.Avg:
                 if (_count == 0)
                 {
-                    return new FilterValue(FilterValueKind.Null, 0, string.Empty);
+                    return new CompiledFilterValue(CompiledFilterValueKind.Null, 0, string.Empty);
                 }
-                return new FilterValue(FilterValueKind.Number, _sum / _count, string.Empty);
-            case AggregateType.Min:
+
+                return new CompiledFilterValue(CompiledFilterValueKind.Number, _sum / _count, string.Empty);
+            case CompiledAggregateType.Min:
                 if (!_hasValue)
                 {
-                    return new FilterValue(FilterValueKind.Null, 0, string.Empty);
+                    return new CompiledFilterValue(CompiledFilterValueKind.Null, 0, string.Empty);
                 }
-                return new FilterValue(FilterValueKind.Number, _min, string.Empty);
-            case AggregateType.Max:
+
+                return new CompiledFilterValue(CompiledFilterValueKind.Number, _min, string.Empty);
+            case CompiledAggregateType.Max:
                 if (!_hasValue)
                 {
-                    return new FilterValue(FilterValueKind.Null, 0, string.Empty);
+                    return new CompiledFilterValue(CompiledFilterValueKind.Null, 0, string.Empty);
                 }
-                return new FilterValue(FilterValueKind.Number, _max, string.Empty);
+
+                return new CompiledFilterValue(CompiledFilterValueKind.Number, _max, string.Empty);
         }
 
-        return new FilterValue(FilterValueKind.Null, 0, string.Empty);
+        return new CompiledFilterValue(CompiledFilterValueKind.Null, 0, string.Empty);
     }
 }

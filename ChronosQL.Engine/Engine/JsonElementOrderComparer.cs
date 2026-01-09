@@ -1,17 +1,27 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
+using ChronosQL.Engine.Compilation;
 using ChronosQL.Engine.Sql;
 
 namespace ChronosQL.Engine;
 
 internal sealed class JsonElementOrderComparer : IComparer<JsonElement>
 {
-    private readonly IReadOnlyList<OrderByDefinition> _orderBy;
+    private readonly IReadOnlyList<CompiledOrderByDefinition> _orderBy;
+
+    public JsonElementOrderComparer(IReadOnlyList<CompiledOrderByDefinition> orderBy)
+    {
+        _orderBy = orderBy;
+    }
 
     public JsonElementOrderComparer(IReadOnlyList<OrderByDefinition> orderBy)
     {
-        _orderBy = orderBy;
+        _orderBy = orderBy.Select(definition => new CompiledOrderByDefinition(
+            definition.OutputName,
+            definition.Direction == SortDirection.Descending
+                ? CompiledSortDirection.Descending
+                : CompiledSortDirection.Ascending)).ToList();
     }
 
     public int Compare(JsonElement left, JsonElement right)
@@ -31,7 +41,7 @@ internal sealed class JsonElementOrderComparer : IComparer<JsonElement>
                 continue;
             }
 
-            return orderBy.Direction == SortDirection.Descending ? -comparison : comparison;
+            return orderBy.Direction == CompiledSortDirection.Descending ? -comparison : comparison;
         }
 
         return 0;
