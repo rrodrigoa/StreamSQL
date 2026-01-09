@@ -1,9 +1,11 @@
 using ChronosQL.Engine;
 using ChronosQL.Engine.Sql;
+using Microsoft.StreamProcessing;
 using StreamSql.Cli;
 using StreamSql.Input;
 using StreamSql.Output;
 using StreamSql.Planning;
+using System.Reactive.Linq;
 using System.Threading.Channels;
 using System.Threading;
 using System.Text.Json;
@@ -311,144 +313,91 @@ public sealed class StreamExecutionEngine
             return;
         }
 
-        var joinChannel = Channel.CreateUnbounded<(JoinSide Side, InputEvent Event)>();
-        var leftBuffer = new Dictionary<string, List<JoinBufferEvent>>(StringComparer.Ordinal);
-        var rightBuffer = new Dictionary<string, List<JoinBufferEvent>>(StringComparer.Ordinal);
         var temporalConstraint = node.Join.TemporalConstraint;
         var leftTimestampBy = node.Join.LeftSource.TimestampBy;
         var rightTimestampBy = node.Join.RightSource.TimestampBy;
-        var unitMs = 0L;
-        var minOffset = 0L;
-        var maxOffset = 0L;
-        var leftMaxExpandedStart = 0L;
-        var rightMaxStart = 0L;
-        var hasLeftMax = false;
-        var hasRightMax = false;
-        const long MinimumEventDurationMs = 1L;
+
+        if (temporalConstraint is not null && (leftTimestampBy is null || rightTimestampBy is null))
+        {
+            throw new InvalidOperationException($"JOIN '{node.Name}' is missing TIMESTAMP BY definitions.");
+        }
+
+        var leftObservable = CreateJoinObservable(
+            runtime.LeftInput,
+            node.Join.LeftKey,
+            temporalConstraint is not null ? leftTimestampBy : null);
+        var rightObservable = CreateJoinObservable(
+            runtime.RightInput,
+            node.Join.RightKey,
+            temporalConstraint is not null ? rightTimestampBy : null);
+
+        var leftStream = leftObservable.ToStreamable(
+            DisorderPolicy.Throw(),
+            FlushPolicy.FlushOnPunctuation,
+            PeriodicPunctuationPolicy.None());
+        var rightStream = rightObservable.ToStreamable(
+            DisorderPolicy.Throw(),
+            FlushPolicy.FlushOnPunctuation,
+            PeriodicPunctuationPolicy.None());
+
+        IStreamable<Empty, JoinInput>? leftWindowCloses = null;
+        if (temporalConstraint is null)
+        {
+            leftStream = leftStream.AlterEventDuration(vs => StreamEvent.InfinitySyncTime - vs);
+            rightStream = rightStream.AlterEventDuration(vs => StreamEvent.InfinitySyncTime - vs);
+        }
+        else
+        {
+            var unitMs = temporalConstraint.Unit.Ticks / TimeSpan.TicksPerMillisecond;
+            var minOffset = temporalConstraint.MinDelta;
+            var maxOffset = temporalConstraint.MaxDelta;
+            var windowDuration = (maxOffset - minOffset + 1) * unitMs;
+
+            leftStream = leftStream
+                .ShiftEventLifetime(minOffset * unitMs)
+                .AlterEventDuration(windowDuration);
+            leftWindowCloses = leftStream
+                .ShiftEventLifetime(windowDuration)
+                .AlterEventDuration(1);
+        }
+
+        var joined = leftStream.Join(
+            rightStream,
+            left => left.JoinKey,
+            right => right.JoinKey,
+            (left, right) => new JoinMatch(left.JoinKey, left.Payload, right.Payload));
 
         if (temporalConstraint is not null)
         {
-            if (leftTimestampBy is null || rightTimestampBy is null)
-            {
-                throw new InvalidOperationException($"JOIN '{node.Name}' is missing TIMESTAMP BY definitions.");
-            }
-
-            unitMs = temporalConstraint.Unit.Ticks / TimeSpan.TicksPerMillisecond;
-            minOffset = temporalConstraint.MinDelta;
-            maxOffset = temporalConstraint.MaxDelta;
+            joined = joined.ClipEventDuration(
+                leftWindowCloses!,
+                match => match.JoinKey,
+                close => close.JoinKey);
         }
 
-        async Task PumpAsync(ChannelReader<InputEvent> reader, JoinSide side)
-        {
-            await foreach (var input in reader.ReadAllAsync(cancellationToken))
-            {
-                await joinChannel.Writer.WriteAsync((side, input), cancellationToken);
-            }
-        }
-
-        var pumpLeft = Task.Run(() => PumpAsync(runtime.LeftInput, JoinSide.Left), cancellationToken);
-        var pumpRight = Task.Run(() => PumpAsync(runtime.RightInput, JoinSide.Right), cancellationToken);
-
-        _ = Task.WhenAll(pumpLeft, pumpRight).ContinueWith(
-            _ => joinChannel.Writer.TryComplete(),
-            cancellationToken);
+        var outputObservable = joined.ToStreamEventObservable();
 
         try
         {
-            await foreach (var item in joinChannel.Reader.ReadAllAsync(cancellationToken))
+            await Task.Run(() =>
             {
-                var side = item.Side;
-                var inputEvent = item.Event;
-                var keyReference = side == JoinSide.Left ? node.Join.LeftKey : node.Join.RightKey;
-                if (!TryGetJoinKey(inputEvent.Payload, keyReference, out var joinKey))
+                foreach (var streamEvent in outputObservable.ToEnumerable())
                 {
-                    continue;
-                }
-
-                if (temporalConstraint is not null)
-                {
-                    var timestampBy = side == JoinSide.Left ? leftTimestampBy : rightTimestampBy;
-                    var resolvedTimestamp = TimestampResolver.ResolveTimestamp(
-                        inputEvent.Payload,
-                        inputEvent.ArrivalTime,
-                        timestampBy);
-                    inputEvent = new InputEvent(inputEvent.Payload, resolvedTimestamp);
-                }
-
-                var buffer = side == JoinSide.Left ? leftBuffer : rightBuffer;
-                if (!buffer.TryGetValue(joinKey, out var events))
-                {
-                    events = new List<JoinBufferEvent>();
-                    buffer[joinKey] = events;
-                }
-
-                var bufferEvent = CreateJoinBufferEvent(
-                    inputEvent,
-                    side,
-                    temporalConstraint is not null,
-                    unitMs,
-                    minOffset,
-                    maxOffset,
-                    MinimumEventDurationMs);
-                events.Add(bufferEvent);
-
-                if (temporalConstraint is not null)
-                {
-                    if (side == JoinSide.Left)
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!streamEvent.IsData)
                     {
-                        leftMaxExpandedStart = hasLeftMax
-                            ? Math.Max(leftMaxExpandedStart, bufferEvent.Start)
-                            : bufferEvent.Start;
-                        hasLeftMax = true;
-
-                        if (hasRightMax)
-                        {
-                            ExpireEvents(leftBuffer, item => item.End <= rightMaxStart);
-                        }
-
-                        ExpireEvents(rightBuffer, item => item.Start < leftMaxExpandedStart);
-                    }
-                    else
-                    {
-                        rightMaxStart = hasRightMax
-                            ? Math.Max(rightMaxStart, bufferEvent.Start)
-                            : bufferEvent.Start;
-                        hasRightMax = true;
-
-                        ExpireEvents(leftBuffer, item => item.End <= rightMaxStart);
-
-                        if (hasLeftMax)
-                        {
-                            ExpireEvents(rightBuffer, item => item.Start < leftMaxExpandedStart);
-                        }
-                    }
-                }
-
-                var probe = side == JoinSide.Left ? rightBuffer : leftBuffer;
-                if (!probe.TryGetValue(joinKey, out var matches))
-                {
-                    continue;
-                }
-
-                foreach (var match in matches)
-                {
-                    var leftEvent = side == JoinSide.Left ? bufferEvent : match;
-                    var rightEvent = side == JoinSide.Left ? match : bufferEvent;
-                    if (temporalConstraint is not null)
-                    {
-                        if (rightEvent.Start < leftEvent.Start || rightEvent.Start >= leftEvent.End)
-                        {
-                            continue;
-                        }
+                        continue;
                     }
 
-                    var payload = BuildJoinPayload(node.Join, leftEvent.Event.Payload, rightEvent.Event.Payload);
-                    var outputTimestamp = temporalConstraint is null
-                        ? Math.Max(leftEvent.Event.ArrivalTime, rightEvent.Event.ArrivalTime)
-                        : Math.Max(leftEvent.Start, rightEvent.Start);
-                    await runtime.Hub.BroadcastAsync(new InputEvent(payload, outputTimestamp), cancellationToken);
+                    var payload = BuildJoinPayload(node.Join, streamEvent.Payload.LeftPayload, streamEvent.Payload.RightPayload);
+                    var timestamp = temporalConstraint is null
+                        ? streamEvent.StartTime
+                        : streamEvent.EndTime;
+                    runtime.Hub.BroadcastAsync(new InputEvent(payload, timestamp), cancellationToken)
+                        .GetAwaiter()
+                        .GetResult();
                 }
-            }
+            }, cancellationToken);
 
             runtime.Hub.Complete();
         }
@@ -633,53 +582,6 @@ public sealed class StreamExecutionEngine
     private static bool MatchesJoinInput(string upstreamName, string joinName) =>
         upstreamName.Equals(joinName, StringComparison.OrdinalIgnoreCase);
 
-    private static JoinBufferEvent CreateJoinBufferEvent(
-        InputEvent inputEvent,
-        JoinSide side,
-        bool temporalJoin,
-        long unitMs,
-        long minOffset,
-        long maxOffset,
-        long minimumDurationMs)
-    {
-        if (!temporalJoin)
-        {
-            var start = inputEvent.ArrivalTime;
-            return new JoinBufferEvent(inputEvent, start, start + minimumDurationMs);
-        }
-
-        if (side == JoinSide.Left)
-        {
-            var expandedStart = inputEvent.ArrivalTime + (minOffset * unitMs);
-            var expandedEnd = inputEvent.ArrivalTime + ((maxOffset + 1) * unitMs);
-            return new JoinBufferEvent(inputEvent, expandedStart, expandedEnd);
-        }
-
-        var rightStart = inputEvent.ArrivalTime;
-        return new JoinBufferEvent(inputEvent, rightStart, rightStart + minimumDurationMs);
-    }
-
-    private static void ExpireEvents(
-        Dictionary<string, List<JoinBufferEvent>> buffer,
-        Func<JoinBufferEvent, bool> shouldExpire)
-    {
-        var expiredKeys = new List<string>();
-
-        foreach (var (key, events) in buffer)
-        {
-            events.RemoveAll(item => shouldExpire(item));
-            if (events.Count == 0)
-            {
-                expiredKeys.Add(key);
-            }
-        }
-
-        foreach (var key in expiredKeys)
-        {
-            buffer.Remove(key);
-        }
-    }
-
     private static bool TryGetJoinKey(JsonElement payload, FieldReference key, out string joinKey)
     {
         joinKey = string.Empty;
@@ -737,11 +639,40 @@ public sealed class StreamExecutionEngine
         return true;
     }
 
-    private enum JoinSide
+    private static IObservable<StreamEvent<JoinInput>> CreateJoinObservable(
+        ChannelReader<InputEvent> reader,
+        FieldReference keyReference,
+        TimestampByDefinition? timestampBy)
     {
-        Left,
-        Right
+        return Observable.Create<StreamEvent<JoinInput>>(async (observer, ct) =>
+        {
+            try
+            {
+                await foreach (var inputEvent in reader.ReadAllAsync(ct))
+                {
+                    if (!TryGetJoinKey(inputEvent.Payload, keyReference, out var joinKey))
+                    {
+                        continue;
+                    }
+
+                    var timestamp = timestampBy is null
+                        ? inputEvent.ArrivalTime
+                        : TimestampResolver.ResolveTimestamp(inputEvent.Payload, inputEvent.ArrivalTime, timestampBy);
+                    var payload = new JoinInput(joinKey, inputEvent.Payload);
+                    observer.OnNext(StreamEvent.CreatePoint(timestamp, payload));
+                }
+
+                observer.OnNext(StreamEvent.CreatePunctuation<JoinInput>(StreamEvent.InfinitySyncTime));
+                observer.OnCompleted();
+            }
+            catch (Exception ex)
+            {
+                observer.OnError(ex);
+            }
+        });
     }
 
-    private readonly record struct JoinBufferEvent(InputEvent Event, long Start, long End);
+    private readonly record struct JoinInput(string JoinKey, JsonElement Payload);
+
+    private readonly record struct JoinMatch(string JoinKey, JsonElement LeftPayload, JsonElement RightPayload);
 }
