@@ -1,8 +1,11 @@
 using System.Reflection;
 using System.Text.Json;
+using System.Threading.Channels;
 using ChronosQL.Engine.Sql;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.StreamProcessing;
+using System.Reactive.Linq;
 
 namespace ChronosQL.Engine.Compilation;
 
@@ -15,9 +18,9 @@ public sealed class QueryCompiler
         _references = BuildMetadataReferences();
     }
 
-    public CompiledQuery Compile(SqlPlan plan, bool follow)
+    public CompiledQuery Compile(SqlPlan plan)
     {
-        var generator = new QuerySourceGenerator(plan, follow);
+        var generator = new QuerySourceGenerator(plan);
         var source = generator.Generate();
 
         var syntaxTree = CSharpSyntaxTree.ParseText(source);
@@ -40,11 +43,11 @@ public sealed class QueryCompiler
         var assembly = Assembly.Load(assemblyStream.ToArray());
         var type = assembly.GetType("ChronosQL.Generated.QueryProgram")
                    ?? throw new InvalidOperationException("Compiled query did not contain QueryProgram type.");
-        var method = type.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)
-                     ?? throw new InvalidOperationException("Compiled query did not contain Run method.");
+        var method = type.GetMethod("ExecuteAsync", BindingFlags.Public | BindingFlags.Static)
+                     ?? throw new InvalidOperationException("Compiled query did not contain ExecuteAsync method.");
 
-        var runner = (Func<IAsyncEnumerable<InputEvent>, CancellationToken, IAsyncEnumerable<JsonElement>>)method
-            .CreateDelegate(typeof(Func<IAsyncEnumerable<InputEvent>, CancellationToken, IAsyncEnumerable<JsonElement>>));
+        var runner = (Func<IAsyncEnumerable<InputEvent>, ChannelWriter<JsonElement>, CancellationToken, Task>)method
+            .CreateDelegate(typeof(Func<IAsyncEnumerable<InputEvent>, ChannelWriter<JsonElement>, CancellationToken, Task>));
 
         return new CompiledQuery(runner, source);
     }
@@ -57,7 +60,9 @@ public sealed class QueryCompiler
             typeof(Enumerable).Assembly,
             typeof(JsonElement).Assembly,
             typeof(InputEvent).Assembly,
-            typeof(QueryRuntime).Assembly
+            typeof(ChannelWriter<>).Assembly,
+            typeof(StreamEvent<>).Assembly,
+            typeof(Observable).Assembly
         };
 
         var references = new List<MetadataReference>();

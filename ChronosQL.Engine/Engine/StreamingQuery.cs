@@ -6,20 +6,26 @@ namespace ChronosQL.Engine;
 
 public sealed class StreamingQuery : IAsyncDisposable
 {
-    private readonly Channel<InputEvent> _channel;
+    private readonly Channel<InputEvent> _input;
+    private readonly Channel<JsonElement> _output;
     private readonly CompiledQuery _compiledQuery;
-    private readonly ChannelReader<InputEvent> _reader;
 
     internal StreamingQuery(CompiledQuery compiledQuery)
     {
         _compiledQuery = compiledQuery;
-        _channel = Channel.CreateUnbounded<InputEvent>(new UnboundedChannelOptions
+        _input = Channel.CreateUnbounded<InputEvent>(new UnboundedChannelOptions
         {
             SingleReader = true,
             SingleWriter = false
         });
-        _reader = _channel.Reader;
-        Results = _compiledQuery.ExecuteAsync(_reader.ReadAllAsync());
+        _output = Channel.CreateUnbounded<JsonElement>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false
+        });
+
+        Results = _output.Reader.ReadAllAsync();
+        _ = _compiledQuery.ExecuteAsync(_input.Reader.ReadAllAsync(), _output.Writer);
     }
 
     public IAsyncEnumerable<JsonElement> Results { get; }
@@ -27,10 +33,10 @@ public sealed class StreamingQuery : IAsyncDisposable
     public async ValueTask EnqueueAsync(JsonElement payload, long? arrivalTime = null, CancellationToken cancellationToken = default)
     {
         var timestamp = arrivalTime ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        await _channel.Writer.WriteAsync(new InputEvent(payload, timestamp), cancellationToken);
+        await _input.Writer.WriteAsync(new InputEvent(payload, timestamp), cancellationToken);
     }
 
-    public void Complete() => _channel.Writer.TryComplete();
+    public void Complete() => _input.Writer.TryComplete();
 
     public async IAsyncEnumerable<string> ResultsAsJson(
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -43,7 +49,8 @@ public sealed class StreamingQuery : IAsyncDisposable
 
     public ValueTask DisposeAsync()
     {
-        _channel.Writer.TryComplete();
+        _input.Writer.TryComplete();
+        _output.Writer.TryComplete();
         return ValueTask.CompletedTask;
     }
 }

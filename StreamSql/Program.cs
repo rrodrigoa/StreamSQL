@@ -1,7 +1,8 @@
 using ChronosQL.Engine;
+using ChronosQL.Engine.Sql;
 using StreamSql.Cli;
-using StreamSql.Execution;
-using StreamSql.Planning;
+using StreamSql.Input;
+using StreamSql.Output;
 
 namespace StreamSql;
 
@@ -26,14 +27,27 @@ public static class Program
         {
             Follow = options.Follow
         });
-        ScriptDomPlan scriptPlan;
+
+        SqlPlan plan;
         try
         {
-            scriptPlan = ScriptDomParser.Parse(sqlText);
+            plan = engine.Parse(sqlText);
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
+
+        if (!options.Inputs.TryGetValue(plan.InputName, out var inputSource))
+        {
+            Console.Error.WriteLine($"SELECT references unknown input '{plan.InputName}'.");
+            return 1;
+        }
+
+        if (!options.Outputs.TryGetValue(plan.OutputName, out var outputDestination))
+        {
+            Console.Error.WriteLine($"SELECT references unknown output '{plan.OutputName}'.");
             return 1;
         }
 
@@ -44,20 +58,15 @@ public static class Program
             shutdown.Cancel();
         };
 
-        if (!StreamGraphPlanner.TryPlan(scriptPlan, options, out var graphPlan, out var validationError))
-        {
-            Console.Error.WriteLine(validationError);
-            return 1;
-        }
-
-        var executionEngine = new StreamExecutionEngine(engine, options.Follow);
         try
         {
-            await executionEngine.ExecuteAsync(
-                graphPlan!,
-                options.Inputs,
-                options.Outputs,
-                shutdown.Token);
+            await using var inputStream = StreamReaderFactory.OpenInput(inputSource);
+            await using var outputStream = StreamReaderFactory.OpenOutput(outputDestination);
+            var reader = new JsonLineReader(inputStream, options.Follow, inputSource.Path);
+            var writer = new JsonLineWriter(outputStream);
+
+            var results = engine.ExecuteAsync(plan, reader.ReadAllAsync(shutdown.Token), shutdown.Token);
+            await writer.WriteAllAsync(results, shutdown.Token);
         }
         catch (Exception ex)
         {
@@ -67,5 +76,4 @@ public static class Program
 
         return 0;
     }
-
 }

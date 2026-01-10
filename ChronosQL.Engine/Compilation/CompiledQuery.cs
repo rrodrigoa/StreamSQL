@@ -1,13 +1,14 @@
 using System.Text.Json;
+using System.Threading.Channels;
 
 namespace ChronosQL.Engine.Compilation;
 
 public sealed class CompiledQuery
 {
-    private readonly Func<IAsyncEnumerable<InputEvent>, CancellationToken, IAsyncEnumerable<JsonElement>> _runner;
+    private readonly Func<IAsyncEnumerable<InputEvent>, ChannelWriter<JsonElement>, CancellationToken, Task> _runner;
 
     public CompiledQuery(
-        Func<IAsyncEnumerable<InputEvent>, CancellationToken, IAsyncEnumerable<JsonElement>> runner,
+        Func<IAsyncEnumerable<InputEvent>, ChannelWriter<JsonElement>, CancellationToken, Task> runner,
         string source)
     {
         _runner = runner;
@@ -16,6 +17,6 @@ public sealed class CompiledQuery
 
     public string Source { get; }
 
-    public IAsyncEnumerable<JsonElement> ExecuteAsync(IAsyncEnumerable<InputEvent> input, CancellationToken cancellationToken = default)
-        => _runner(input, cancellationToken);
+    public Task ExecuteAsync(IAsyncEnumerable<InputEvent> input, ChannelWriter<JsonElement> output, CancellationToken cancellationToken = default)
+        => _runner(input, output, cancellationToken);
 }

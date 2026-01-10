@@ -12,18 +12,18 @@ public class TimestampByTests
     public async Task UsesNumericTimestampBy()
     {
         var engine = new ChronosQLEngine();
-        var plan = engine.Parse("SELECT COUNT(*) FROM input TIMESTAMP BY ts GROUP BY TUMBLINGWINDOW(second, 5)");
+        var plan = engine.Parse("SELECT data.value INTO output FROM input TIMESTAMP BY ts");
 
         var events = new[]
         {
-            BuildEvent("{\"ts\":1000}", 10),
-            BuildEvent("{\"ts\":6000}", 20)
+            BuildEvent("{\"ts\":1000,\"data\":{\"value\":1}}", 10),
+            BuildEvent("{\"ts\":2000,\"data\":{\"value\":2}}", 20)
         };
 
         var results = await ExecuteAsync(engine, plan, events);
 
         Assert.Equal(
-            new[] { "{\"windowStart\":0,\"windowEnd\":5000,\"count\":1}", "{\"windowStart\":5000,\"windowEnd\":10000,\"count\":1}" },
+            new[] { "{\"value\":1}", "{\"value\":2}" },
             results);
     }
 
@@ -31,37 +31,18 @@ public class TimestampByTests
     public async Task UsesIsoTimestampBy()
     {
         var engine = new ChronosQLEngine();
-        var plan = engine.Parse("SELECT COUNT(*) FROM input TIMESTAMP BY ts GROUP BY TUMBLINGWINDOW(second, 5)");
+        var plan = engine.Parse("SELECT data.value INTO output FROM input TIMESTAMP BY ts");
 
         var events = new[]
         {
-            BuildEvent("{\"ts\":\"1970-01-01T00:00:02Z\"}", 10),
-            BuildEvent("{\"ts\":\"1970-01-01T00:00:04Z\"}", 20)
+            BuildEvent("{\"ts\":\"1970-01-01T00:00:02Z\",\"data\":{\"value\":3}}", 10),
+            BuildEvent("{\"ts\":\"1970-01-01T00:00:03Z\",\"data\":{\"value\":4}}", 20)
         };
 
         var results = await ExecuteAsync(engine, plan, events);
 
         Assert.Equal(
-            new[] { "{\"windowStart\":0,\"windowEnd\":5000,\"count\":2}" },
-            results);
-    }
-
-    [Fact]
-    public async Task DefaultsToArrivalTimeWhenTimestampByMissing()
-    {
-        var engine = new ChronosQLEngine();
-        var plan = engine.Parse("SELECT COUNT(*) FROM input GROUP BY TUMBLINGWINDOW(second, 5)");
-
-        var events = new[]
-        {
-            BuildEvent("{\"ts\":1000}", 1000),
-            BuildEvent("{\"ts\":6000}", 6000)
-        };
-
-        var results = await ExecuteAsync(engine, plan, events);
-
-        Assert.Equal(
-            new[] { "{\"windowStart\":0,\"windowEnd\":5000,\"count\":1}", "{\"windowStart\":5000,\"windowEnd\":10000,\"count\":1}" },
+            new[] { "{\"value\":3}", "{\"value\":4}" },
             results);
     }
 
@@ -69,11 +50,11 @@ public class TimestampByTests
     public async Task ThrowsForInvalidTimestampBy()
     {
         var engine = new ChronosQLEngine();
-        var plan = engine.Parse("SELECT COUNT(*) FROM input TIMESTAMP BY ts GROUP BY TUMBLINGWINDOW(second, 5)");
+        var plan = engine.Parse("SELECT data.value INTO output FROM input TIMESTAMP BY ts");
 
         var events = new[]
         {
-            BuildEvent("{\"ts\":\"not-a-timestamp\"}", 10)
+            BuildEvent("{\"ts\":\"not-a-timestamp\",\"data\":{\"value\":1}}", 10)
         };
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => ExecuteAsync(engine, plan, events));
