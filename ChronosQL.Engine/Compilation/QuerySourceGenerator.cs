@@ -37,15 +37,15 @@ internal sealed class QuerySourceGenerator
         builder.AppendLine("{");
         builder.AppendLine("    public static async Task ExecuteAsync(IAsyncEnumerable<InputEvent> input, ChannelWriter<JsonElement> output, CancellationToken cancellationToken)");
         builder.AppendLine("    {");
-        builder.AppendLine("        var observable = CreateObservable(input, cancellationToken);");
-        builder.AppendLine("        var stream = observable.ToStreamable();");
-        builder.AppendLine("        var projected = stream.Select(payload => Project(payload));");
-        builder.AppendLine("        var outputObservable = projected.ToStreamEventObservable();");
-        builder.AppendLine("        var dataEvents = outputObservable");
+        builder.AppendLine("        IObservable<StreamEvent<JsonElement>> observable = CreateObservable(input, cancellationToken);");
+        builder.AppendLine("        IStreamable<Empty, JsonElement> stream = observable.ToStreamable();");
+        builder.AppendLine("        IStreamable<Empty, JsonElement> projected = stream.Select(payload => Project(payload));");
+        builder.AppendLine("        IObservable<StreamEvent<JsonElement>> outputObservable = projected.ToStreamEventObservable();");
+        builder.AppendLine("        IObservable<JsonElement> dataEvents = outputObservable");
         builder.AppendLine("            .Where(streamEvent => streamEvent.IsData)");
         builder.AppendLine("            .Select(streamEvent => streamEvent.Payload);");
-        builder.AppendLine("        var completion = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);");
-        builder.AppendLine("        using var subscription = dataEvents.Subscribe(");
+        builder.AppendLine("        TaskCompletionSource<object?> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);");
+        builder.AppendLine("        using IDisposable subscription = dataEvents.Subscribe(");
         builder.AppendLine("            onNext: payload =>");
         builder.AppendLine("            {");
         builder.AppendLine("                output.TryWrite(payload);");
@@ -60,9 +60,9 @@ internal sealed class QuerySourceGenerator
         builder.AppendLine("                output.TryComplete();");
         builder.AppendLine("                completion.TrySetResult(null);");
         builder.AppendLine("            });");
-        builder.AppendLine("        using var registration = cancellationToken.Register(() =>");
+        builder.AppendLine("        using CancellationTokenRegistration registration = cancellationToken.Register(() =>");
         builder.AppendLine("        {");
-        builder.AppendLine("            var exception = new OperationCanceledException(cancellationToken);");
+        builder.AppendLine("            OperationCanceledException exception = new(cancellationToken);");
         builder.AppendLine("            output.TryComplete(exception);");
         builder.AppendLine("            completion.TrySetCanceled(cancellationToken);");
         builder.AppendLine("        });");
@@ -74,9 +74,9 @@ internal sealed class QuerySourceGenerator
         builder.AppendLine("        {");
         builder.AppendLine("            try");
         builder.AppendLine("            {");
-        builder.AppendLine("                await foreach (var item in input.WithCancellation(ct))");
+        builder.AppendLine("                await foreach (InputEvent item in input.WithCancellation(ct))");
         builder.AppendLine("                {");
-        builder.AppendLine("                    var timestamp = ResolveTimestamp(item.Payload, item.ArrivalTime);");
+        builder.AppendLine("                    long timestamp = ResolveTimestamp(item.Payload, item.ArrivalTime);");
         builder.AppendLine("                    observer.OnNext(StreamEvent.CreatePoint(timestamp, item.Payload));");
         builder.AppendLine("                }");
         builder.AppendLine();
@@ -91,17 +91,17 @@ internal sealed class QuerySourceGenerator
         builder.AppendLine();
         builder.AppendLine("    private static JsonElement Project(JsonElement payload)");
         builder.AppendLine("    {");
-        builder.AppendLine("        using var stream = new MemoryStream();");
-        builder.AppendLine("        using (var writer = new Utf8JsonWriter(stream))");
+        builder.AppendLine("        using MemoryStream stream = new();");
+        builder.AppendLine("        using (Utf8JsonWriter writer = new(stream))");
         builder.AppendLine("        {");
         builder.AppendLine("            writer.WriteStartObject();");
         var fieldIndex = 0;
         foreach (var field in _plan.SelectFields)
         {
-            var accessor = GetFieldAccessorName(field.Field);
-            var outputName = Escape(field.OutputName);
+            string accessor = GetFieldAccessorName(field.Field);
+            string outputName = Escape(field.OutputName);
             builder.AppendLine($"            writer.WritePropertyName(\"{outputName}\");");
-            builder.AppendLine($"            if ({accessor}(payload, out var fieldValue{fieldIndex}))");
+            builder.AppendLine($"            if ({accessor}(payload, out JsonElement fieldValue{fieldIndex}))");
             builder.AppendLine("            {");
             builder.AppendLine($"                fieldValue{fieldIndex}.WriteTo(writer);");
             builder.AppendLine("            }");
@@ -114,7 +114,7 @@ internal sealed class QuerySourceGenerator
         builder.AppendLine("            writer.WriteEndObject();");
         builder.AppendLine("        }");
         builder.AppendLine("        stream.Position = 0;");
-        builder.AppendLine("        using var document = JsonDocument.Parse(stream);");
+        builder.AppendLine("        using JsonDocument document = JsonDocument.Parse(stream);");
         builder.AppendLine("        return document.RootElement.Clone();");
         builder.AppendLine("    }");
         builder.AppendLine();
@@ -126,8 +126,8 @@ internal sealed class QuerySourceGenerator
         }
         else
         {
-            var accessor = GetFieldAccessorName(_plan.TimestampBy.Field);
-            builder.AppendLine($"        if (!{accessor}(payload, out var timestampElement))");
+            string accessor = GetFieldAccessorName(_plan.TimestampBy.Field);
+            builder.AppendLine($"        if (!{accessor}(payload, out JsonElement timestampElement))");
             builder.AppendLine("        {");
             builder.AppendLine("            throw new InvalidOperationException(\"TIMESTAMP BY field was not found in the payload.\");");
             builder.AppendLine("        }");
@@ -140,14 +140,14 @@ internal sealed class QuerySourceGenerator
         builder.AppendLine("        switch (element.ValueKind)");
         builder.AppendLine("        {");
         builder.AppendLine("            case JsonValueKind.Number:");
-        builder.AppendLine("                if (element.TryGetInt64(out var intValue))");
+        builder.AppendLine("                if (element.TryGetInt64(out long intValue))");
         builder.AppendLine("                {");
         builder.AppendLine("                    return intValue;");
         builder.AppendLine("                }");
         builder.AppendLine("                return (long)element.GetDouble();");
         builder.AppendLine("            case JsonValueKind.String:");
-        builder.AppendLine("                var text = element.GetString();");
-        builder.AppendLine("                if (DateTimeOffset.TryParse(text, out var parsed))");
+        builder.AppendLine("                string? text = element.GetString();");
+        builder.AppendLine("                if (DateTimeOffset.TryParse(text, out DateTimeOffset parsed))");
         builder.AppendLine("                {");
         builder.AppendLine("                    return parsed.ToUnixTimeMilliseconds();");
         builder.AppendLine("                }");
@@ -203,7 +203,7 @@ internal sealed class QuerySourceGenerator
         builder.AppendLine("        value = payload;");
         foreach (var segment in field.PathSegments)
         {
-            var escaped = Escape(segment);
+            string escaped = Escape(segment);
             builder.AppendLine("        if (value.ValueKind != JsonValueKind.Object)");
             builder.AppendLine("        {");
             builder.AppendLine("            return false;");
