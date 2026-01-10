@@ -6,6 +6,8 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.StreamProcessing;
 using System.Reactive.Linq;
+using System.Linq.Expressions;
+using System.Buffers;
 
 namespace ChronosQL.Engine.Compilation;
 
@@ -20,18 +22,20 @@ public sealed class QueryCompiler
 
     public CompiledQuery Compile(SqlPlan plan)
     {
-        var generator = new QuerySourceGenerator(plan);
-        var source = generator.Generate();
+        QuerySourceGenerator generator = new QuerySourceGenerator(plan);
+        string source = generator.Generate();
+
+        string engineID = $"ChronosQL.Generated.{Guid.NewGuid():N}";
+        File.WriteAllTextAsync($"./{engineID}.cs", source);
 
         var syntaxTree = CSharpSyntaxTree.ParseText(source);
         var compilation = CSharpCompilation.Create(
-                assemblyName: $"ChronosQL.Generated.{Guid.NewGuid():N}",
+                assemblyName: engineID,
                 syntaxTrees: new[] { syntaxTree },
                 references: _references,
-                options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary))
-            .WithOptimizationLevel(OptimizationLevel.Release);
+                options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, optimizationLevel: OptimizationLevel.Debug));
 
-        using var assemblyStream = new MemoryStream();
+        using MemoryStream assemblyStream = new MemoryStream();
         var emitResult = compilation.Emit(assemblyStream);
         if (!emitResult.Success)
         {
@@ -62,7 +66,9 @@ public sealed class QueryCompiler
             typeof(InputEvent).Assembly,
             typeof(ChannelWriter<>).Assembly,
             typeof(StreamEvent<>).Assembly,
-            typeof(Observable).Assembly
+            typeof(Observable).Assembly,
+            typeof(Expression<>).Assembly,
+            typeof(IBufferWriter<>).Assembly
         };
 
         var references = new List<MetadataReference>();
