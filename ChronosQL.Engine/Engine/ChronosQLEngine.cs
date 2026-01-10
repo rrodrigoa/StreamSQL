@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Threading.Channels;
 using ChronosQL.Engine.Compilation;
 using ChronosQL.Engine.Sql;
 
@@ -34,8 +35,19 @@ public sealed class ChronosQLEngine
         IAsyncEnumerable<InputEvent> input,
         CancellationToken cancellationToken = default)
     {
-        var compiled = _compiler.Compile(plan, Options.Follow);
-        return compiled.ExecuteAsync(input, cancellationToken);
+        var compiled = _compiler.Compile(plan);
+        var channel = Channel.CreateUnbounded<JsonElement>(new UnboundedChannelOptions
+        {
+            SingleWriter = false,
+            SingleReader = true
+        });
+
+        _ = Task.Run(async () =>
+        {
+            await compiled.ExecuteAsync(input, channel.Writer, cancellationToken).ConfigureAwait(false);
+        }, cancellationToken);
+
+        return channel.Reader.ReadAllAsync(cancellationToken);
     }
 
     public async Task<IReadOnlyList<JsonElement>> ExecuteBatchAsync(
@@ -123,12 +135,12 @@ public sealed class ChronosQLEngine
 
     public StreamingQuery CreateStreamingQuery(SqlPlan plan)
     {
-        var compiled = _compiler.Compile(plan, Options.Follow);
+        var compiled = _compiler.Compile(plan);
         return new StreamingQuery(compiled);
     }
 
     public CompiledQuery Compile(SqlPlan plan)
-        => _compiler.Compile(plan, Options.Follow);
+        => _compiler.Compile(plan);
 
     public StreamingQuery CreateStreamingQuery(CompiledQuery compiledQuery)
         => new StreamingQuery(compiledQuery);
