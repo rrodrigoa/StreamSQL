@@ -64,8 +64,8 @@ public static class SqlParser
 
         var outputName = GetSchemaObjectName(selectStatement.Into);
         var inputName = GetSingleInputName(querySpecification);
-        var fields = ParseSelectFields(querySpecification);
-        var timestampBy = ParseTimestampBy(querySpecification);
+        var fields = ParseSelectFields(querySpecification, inputName);
+        var timestampBy = ParseTimestampBy(querySpecification, inputName);
 
         return new SqlPlan(selectStatement.ToString(), inputName, outputName, timestampBy, fields);
     }
@@ -108,7 +108,7 @@ public static class SqlParser
         }
     }
 
-    private static IReadOnlyList<SelectFieldDefinition> ParseSelectFields(QuerySpecification querySpecification)
+    private static IReadOnlyList<SelectFieldDefinition> ParseSelectFields(QuerySpecification querySpecification, string inputName)
     {
         if (querySpecification.SelectElements.Count == 0)
         {
@@ -133,7 +133,7 @@ public static class SqlParser
                 throw new InvalidOperationException("Only column references are supported in SELECT.");
             }
 
-            var field = BuildFieldReference(columnReference);
+            var field = BuildFieldReference(columnReference, inputName);
             var outputName = scalar.ColumnName?.Value ?? field.PathSegments[^1];
             fields.Add(new SelectFieldDefinition(field, outputName));
         }
@@ -141,7 +141,7 @@ public static class SqlParser
         return fields;
     }
 
-    private static FieldReference BuildFieldReference(ColumnReferenceExpression expression)
+    private static FieldReference BuildFieldReference(ColumnReferenceExpression expression, string? inputName)
     {
         if (expression.MultiPartIdentifier is null || expression.MultiPartIdentifier.Identifiers.Count == 0)
         {
@@ -153,6 +153,8 @@ public static class SqlParser
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .ToList();
 
+        segments = RemoveInputPrefix(segments, inputName);
+
         if (segments.Count == 0)
         {
             throw new InvalidOperationException("Invalid column reference.");
@@ -161,7 +163,7 @@ public static class SqlParser
         return new FieldReference(segments);
     }
 
-    private static TimestampByDefinition? ParseTimestampBy(QuerySpecification querySpecification)
+    private static TimestampByDefinition? ParseTimestampBy(QuerySpecification querySpecification, string inputName)
     {
         if (!TryGetTimestampByExpression(querySpecification, out var expression))
         {
@@ -173,7 +175,7 @@ public static class SqlParser
             throw new InvalidOperationException("TIMESTAMP BY only supports column references.");
         }
 
-        var field = BuildFieldReference(columnReference);
+        var field = BuildFieldReference(columnReference, inputName);
         return new TimestampByDefinition(field);
     }
 
@@ -215,6 +217,32 @@ public static class SqlParser
         }
 
         return string.Join(".", name.Identifiers.Select(id => id.Value));
+    }
+
+    private static List<string> RemoveInputPrefix(IReadOnlyList<string> segments, string? inputName)
+    {
+        if (string.IsNullOrWhiteSpace(inputName))
+        {
+            return segments.ToList();
+        }
+
+        var inputSegments = inputName
+            .Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (inputSegments.Length == 0 || segments.Count < inputSegments.Length)
+        {
+            return segments.ToList();
+        }
+
+        for (var i = 0; i < inputSegments.Length; i++)
+        {
+            if (!string.Equals(segments[i], inputSegments[i], StringComparison.OrdinalIgnoreCase))
+            {
+                return segments.ToList();
+            }
+        }
+
+        return segments.Skip(inputSegments.Length).ToList();
     }
 
     private static IEnumerable<TSqlStatement> ExtractStatements(TSqlFragment fragment)
