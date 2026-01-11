@@ -91,31 +91,38 @@ internal sealed class QuerySourceGenerator
         builder.AppendLine();
         builder.AppendLine("    private static JsonElement Project(JsonElement payload)");
         builder.AppendLine("    {");
-        builder.AppendLine("        using MemoryStream stream = new();");
-        builder.AppendLine("        using (Utf8JsonWriter writer = new(stream))");
-        builder.AppendLine("        {");
-        builder.AppendLine("            writer.WriteStartObject();");
-        var fieldIndex = 0;
-        foreach (var field in _plan.SelectFields)
+        if (_plan.SelectAll)
         {
-            string accessor = GetFieldAccessorName(field.Field);
-            string outputName = Escape(field.OutputName);
-            builder.AppendLine($"            writer.WritePropertyName(\"{outputName}\");");
-            builder.AppendLine($"            if ({accessor}(payload, out JsonElement fieldValue{fieldIndex}))");
-            builder.AppendLine("            {");
-            builder.AppendLine($"                fieldValue{fieldIndex}.WriteTo(writer);");
-            builder.AppendLine("            }");
-            builder.AppendLine("            else");
-            builder.AppendLine("            {");
-            builder.AppendLine("                writer.WriteNullValue();");
-            builder.AppendLine("            }");
-            fieldIndex++;
+            builder.AppendLine("        return payload;");
         }
-        builder.AppendLine("            writer.WriteEndObject();");
-        builder.AppendLine("        }");
-        builder.AppendLine("        stream.Position = 0;");
-        builder.AppendLine("        using JsonDocument document = JsonDocument.Parse(stream);");
-        builder.AppendLine("        return document.RootElement.Clone();");
+        else
+        {
+            builder.AppendLine("        using MemoryStream stream = new();");
+            builder.AppendLine("        using (Utf8JsonWriter writer = new(stream))");
+            builder.AppendLine("        {");
+            builder.AppendLine("            writer.WriteStartObject();");
+            var fieldIndex = 0;
+            foreach (var field in _plan.SelectFields)
+            {
+                string accessor = GetFieldAccessorName(field.Field);
+                string outputName = Escape(field.OutputName);
+                builder.AppendLine($"            writer.WritePropertyName(\"{outputName}\");");
+                builder.AppendLine($"            if ({accessor}(payload, out JsonElement fieldValue{fieldIndex}))");
+                builder.AppendLine("            {");
+                builder.AppendLine($"                fieldValue{fieldIndex}.WriteTo(writer);");
+                builder.AppendLine("            }");
+                builder.AppendLine("            else");
+                builder.AppendLine("            {");
+                builder.AppendLine("                writer.WriteNullValue();");
+                builder.AppendLine("            }");
+                fieldIndex++;
+            }
+            builder.AppendLine("            writer.WriteEndObject();");
+            builder.AppendLine("        }");
+            builder.AppendLine("        stream.Position = 0;");
+            builder.AppendLine("        using JsonDocument document = JsonDocument.Parse(stream);");
+            builder.AppendLine("        return document.RootElement.Clone();");
+        }
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private static long ResolveTimestamp(JsonElement payload, long arrivalTime)");

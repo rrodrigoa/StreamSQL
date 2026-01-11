@@ -1,10 +1,12 @@
+using StreamSql.Input;
+
 namespace StreamSql.Cli;
 
 public sealed class CommandLineOptions
 {
     public string? QueryText { get; init; }
     public string? QueryFilePath { get; init; }
-    public bool Follow { get; init; }
+    public InputReadMode ReadMode { get; init; }
     public IReadOnlyDictionary<string, InputSource> Inputs { get; init; } = new Dictionary<string, InputSource>(StringComparer.OrdinalIgnoreCase);
     public IReadOnlyDictionary<string, OutputDestination> Outputs { get; init; } = new Dictionary<string, OutputDestination>(StringComparer.OrdinalIgnoreCase);
     public IReadOnlySet<string> ExplicitInputs { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -22,13 +24,13 @@ public sealed class CommandLineOptions
 
         if (args.Length == 0)
         {
-            error = "Usage: streamsql [--query \"SQL\"] [--file path] [--input name=path|name=-] [--follow] [--out path] [--output name=path|name=-] <query.sql>";
+            error = "Usage: streamsql [--query \"SQL\"] [--file path] [--input name=path|name=-] [--follow|--tail] [--out path] [--output name=path|name=-] <query.sql>";
             return false;
         }
 
         string? queryText = null;
         string? queryFilePath = null;
-        var follow = false;
+        var readMode = InputReadMode.Normal;
         var inputBindings = new List<InputBinding>();
         var outputBindings = new List<OutputBinding>();
         var explicitInputs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -92,7 +94,20 @@ public sealed class CommandLineOptions
                     explicitOutputs.Add(outputName);
                     break;
                 case "--follow":
-                    follow = true;
+                    if (readMode != InputReadMode.Normal)
+                    {
+                        error = "Only one of --follow or --tail can be specified.";
+                        return false;
+                    }
+                    readMode = InputReadMode.Follow;
+                    break;
+                case "--tail":
+                    if (readMode != InputReadMode.Normal)
+                    {
+                        error = "Only one of --follow or --tail can be specified.";
+                        return false;
+                    }
+                    readMode = InputReadMode.Tail;
                     break;
                 default:
                     remaining.Add(arg);
@@ -131,9 +146,9 @@ public sealed class CommandLineOptions
             return false;
         }
 
-        if (follow && !inputs.Values.Any(source => source.Kind == InputSourceKind.File))
+        if (readMode != InputReadMode.Normal && !inputs.Values.Any(source => source.Kind == InputSourceKind.File))
         {
-            error = "--follow can only be used with file inputs.";
+            error = "Follow and tail modes can only be used with file inputs.";
             return false;
         }
 
@@ -141,7 +156,7 @@ public sealed class CommandLineOptions
         {
             QueryText = queryText,
             QueryFilePath = queryFilePath,
-            Follow = follow,
+            ReadMode = readMode,
             Inputs = inputs,
             Outputs = outputs,
             ExplicitInputs = explicitInputs,
