@@ -12,7 +12,7 @@ public class JsonLineReaderTests
     {
         var payload = "{\"value\":1}\n{\"value\":2}\n";
         await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(payload));
-        var reader = new JsonLineReader(stream, follow: false);
+        var reader = new JsonLineReader(stream, InputReadMode.Normal);
 
         var results = new List<InputEvent>();
         await foreach (var element in reader.ReadAllAsync())

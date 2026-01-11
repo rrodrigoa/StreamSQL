@@ -28,7 +28,7 @@ public class CommandLineOptionsTests
         var success = CommandLineOptions.TryParse(args, out _, out var error);
 
         Assert.False(success);
-        Assert.Equal("--follow can only be used with file inputs.", error);
+        Assert.Equal("Follow and tail modes can only be used with file inputs.", error);
     }
 
     [Fact]
