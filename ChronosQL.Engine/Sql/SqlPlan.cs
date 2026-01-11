@@ -9,6 +9,7 @@ public sealed record SqlPlan(
     string InputName,
     string OutputName,
     TimestampByDefinition? TimestampBy,
+    bool SelectAll,
     IReadOnlyList<SelectFieldDefinition> SelectFields);
 
 public sealed record SelectFieldDefinition(FieldReference Field, string OutputName);

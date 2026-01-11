@@ -6,18 +6,22 @@ namespace StreamSql.Input;
 public sealed class JsonLineReader
 {
     private readonly Stream _stream;
-    private readonly bool _follow;
+    private readonly InputReadMode _mode;
     private readonly StreamReader _reader;
     private readonly string? _filePath;
     private readonly FileStream? _fileStream;
 
-    public JsonLineReader(Stream stream, bool follow, string? filePath = null)
+    public JsonLineReader(Stream stream, InputReadMode mode, string? filePath = null)
     {
         _stream = stream;
-        _follow = follow;
+        _mode = mode;
         _filePath = filePath;
         _fileStream = stream as FileStream;
         _reader = new StreamReader(_stream, leaveOpen: true);
+        if (_mode == InputReadMode.Tail)
+        {
+            SkipExistingFileContent();
+        }
     }
 
     public async IAsyncEnumerable<InputEvent> ReadAllAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -27,7 +31,7 @@ public sealed class JsonLineReader
             var line = await _reader.ReadLineAsync(cancellationToken);
             if (line is null)
             {
-                if (_follow && IsFileInput)
+                if (ShouldWaitForMoreData())
                 {
                     await WaitForMoreFileDataAsync(cancellationToken);
                     continue;
@@ -66,7 +70,7 @@ public sealed class JsonLineReader
 
             if (line is null)
             {
-                if (_follow && IsFileInput)
+                if (ShouldWaitForMoreData())
                 {
                     await WaitForMoreFileDataAsync(cancellationToken);
                     continue;
@@ -89,7 +93,7 @@ public sealed class JsonLineReader
             var nextLine = await _reader.ReadLineAsync(cancellationToken);
             if (nextLine is null)
             {
-                if (_follow && IsFileInput)
+                if (ShouldWaitForMoreData())
                 {
                     await WaitForMoreFileDataAsync(cancellationToken);
                     continue;
@@ -109,6 +113,26 @@ public sealed class JsonLineReader
         return new BatchReadResult(events, IsCompleted: false);
     }
 
+    public async Task<IReadOnlyList<InputEvent>> ReadAllToListAsync(CancellationToken cancellationToken = default)
+    {
+        var events = new List<InputEvent>();
+        while (true)
+        {
+            var line = await _reader.ReadLineAsync(cancellationToken);
+            if (line is null)
+            {
+                return events;
+            }
+
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            events.Add(ParseLine(line));
+        }
+    }
+
     private bool IsFileInput => _fileStream is not null && !string.IsNullOrWhiteSpace(ResolvedFilePath);
 
     private string? ResolvedFilePath => _filePath ?? _fileStream?.Name;
@@ -126,6 +150,20 @@ public sealed class JsonLineReader
         }
 
         return _reader.Peek() >= 0;
+    }
+
+    private bool ShouldWaitForMoreData()
+        => _mode is InputReadMode.Follow or InputReadMode.Tail && IsFileInput;
+
+    private void SkipExistingFileContent()
+    {
+        if (_fileStream is null || !IsFileInput || !_fileStream.CanSeek)
+        {
+            return;
+        }
+
+        _fileStream.Seek(0, SeekOrigin.End);
+        _reader.DiscardBufferedData();
     }
 
     private async Task WaitForMoreFileDataAsync(CancellationToken cancellationToken)

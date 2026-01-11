@@ -25,7 +25,7 @@ public static class Program
         var sqlText = options.QueryText ?? await File.ReadAllTextAsync(options.QueryFilePath!);
         var engine = new ChronosQLEngine(new EngineExecutionOptions
         {
-            Follow = options.Follow
+            Follow = options.ReadMode != InputReadMode.Normal
         });
 
         SqlPlan plan;
@@ -62,11 +62,20 @@ public static class Program
         {
             await using var inputStream = StreamReaderFactory.OpenInput(inputSource);
             await using var outputStream = StreamReaderFactory.OpenOutput(outputDestination);
-            var reader = new JsonLineReader(inputStream, options.Follow, inputSource.Path);
+            var reader = new JsonLineReader(inputStream, options.ReadMode, inputSource.Path);
             var writer = new JsonLineWriter(outputStream);
 
-            var results = engine.ExecuteAsync(plan, reader.ReadAllAsync(shutdown.Token), shutdown.Token);
-            await writer.WriteAllAsync(results, shutdown.Token);
+            if (options.ReadMode == InputReadMode.Normal)
+            {
+                var inputEvents = await reader.ReadAllToListAsync(shutdown.Token);
+                var results = await engine.ExecuteBatchAsync(plan, inputEvents, shutdown.Token);
+                await writer.WriteAllAsync(results, shutdown.Token);
+            }
+            else
+            {
+                var results = engine.ExecuteAsync(plan, reader.ReadAllAsync(shutdown.Token), shutdown.Token);
+                await writer.WriteAllAsync(results, shutdown.Token);
+            }
         }
         catch (Exception ex)
         {

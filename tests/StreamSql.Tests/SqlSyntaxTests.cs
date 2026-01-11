@@ -14,6 +14,10 @@ public class SqlSyntaxTests
         => AssertParsesSupportedSql("SELECT data.value INTO output FROM input TIMESTAMP BY ts");
 
     [Fact]
+    public void ParsesSelectAll()
+        => AssertParsesSupportedSql("SELECT * INTO output FROM input");
+
+    [Fact]
     public void RejectsMissingInto()
         => AssertRejectsUnsupportedSql("SELECT data.value FROM input", "INTO");
 
@@ -24,6 +28,10 @@ public class SqlSyntaxTests
     [Fact]
     public void RejectsMultipleInputs()
         => AssertRejectsUnsupportedSql("SELECT data.value INTO output FROM input, other", "one input");
+
+    [Fact]
+    public void RejectsSelectAllWithAdditionalFields()
+        => AssertRejectsUnsupportedSql("SELECT *, data.value INTO output FROM input", "SELECT * cannot be combined");
 
     private static void AssertParsesSupportedSql(string sql)
     {
