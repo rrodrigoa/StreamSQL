@@ -52,11 +52,9 @@ public static class Program
         }
 
         using var shutdown = new CancellationTokenSource();
-        Console.CancelKeyPress += (_, e) =>
-        {
-            e.Cancel = true;
-            shutdown.Cancel();
-        };
+        var quitListener = options.ReadMode != InputReadMode.Normal
+            ? MonitorQuitAsync(shutdown)
+            : Task.CompletedTask;
 
         try
         {
@@ -77,12 +75,43 @@ public static class Program
                 await writer.WriteAllAsync(results, shutdown.Token);
             }
         }
+        catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
+        {
+            return 0;
+        }
         catch (Exception ex)
         {
             Console.Error.WriteLine(ex.Message);
             return 1;
         }
 
+        await quitListener;
         return 0;
     }
+
+    private static Task MonitorQuitAsync(CancellationTokenSource shutdown)
+        => Task.Run(async () =>
+        {
+            var buffer = new char[1];
+            try
+            {
+                while (!shutdown.IsCancellationRequested)
+                {
+                    var read = await Console.In.ReadAsync(buffer.AsMemory(0, 1), shutdown.Token);
+                    if (read == 0)
+                    {
+                        return;
+                    }
+
+                    if (buffer[0] is 'q' or 'Q')
+                    {
+                        shutdown.Cancel();
+                        return;
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        });
 }

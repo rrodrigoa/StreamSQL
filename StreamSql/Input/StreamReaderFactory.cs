@@ -24,7 +24,13 @@ public static class StreamReaderFactory
             throw new InvalidOperationException("Input file path cannot be empty.");
         }
 
-        return new FileStream(source.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        return new FileStream(source.Path, new FileStreamOptions
+        {
+            Access = FileAccess.Read,
+            Mode = FileMode.Open,
+            Share = FileShare.ReadWrite,
+            Options = FileOptions.Asynchronous | FileOptions.SequentialScan
+        });
     }
 
     public static Stream OpenOutput(OutputDestination destination)
@@ -44,7 +50,13 @@ public static class StreamReaderFactory
             throw new InvalidOperationException("Output file path cannot be empty.");
         }
 
-        return new FileStream(destination.Path, FileMode.Create, FileAccess.Write, FileShare.Read);
+        return new FileStream(destination.Path, new FileStreamOptions
+        {
+            Access = FileAccess.Write,
+            Mode = FileMode.Create,
+            Share = FileShare.Read,
+            Options = FileOptions.Asynchronous | FileOptions.SequentialScan
+        });
     }
 
     private sealed class NonDisposingStream : Stream

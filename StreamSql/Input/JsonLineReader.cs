@@ -34,6 +34,7 @@ public sealed class JsonLineReader
                 if (ShouldWaitForMoreData())
                 {
                     await WaitForMoreFileDataAsync(cancellationToken);
+                    ResetReaderBuffer();
                     continue;
                 }
 
@@ -73,6 +74,7 @@ public sealed class JsonLineReader
                 if (ShouldWaitForMoreData())
                 {
                     await WaitForMoreFileDataAsync(cancellationToken);
+                    ResetReaderBuffer();
                     continue;
                 }
 
@@ -96,6 +98,7 @@ public sealed class JsonLineReader
                 if (ShouldWaitForMoreData())
                 {
                     await WaitForMoreFileDataAsync(cancellationToken);
+                    ResetReaderBuffer();
                     continue;
                 }
 
@@ -164,6 +167,18 @@ public sealed class JsonLineReader
 
         _fileStream.Seek(0, SeekOrigin.End);
         _reader.DiscardBufferedData();
+    }
+
+    private void ResetReaderBuffer()
+    {
+        if (_fileStream is null || !_fileStream.CanSeek)
+        {
+            return;
+        }
+
+        var position = _fileStream.Position;
+        _reader.DiscardBufferedData();
+        _fileStream.Seek(position, SeekOrigin.Begin);
     }
 
     private async Task WaitForMoreFileDataAsync(CancellationToken cancellationToken)
