@@ -64,10 +64,16 @@ public static class SqlParser
 
         var outputName = GetSchemaObjectName(selectStatement.Into);
         var inputName = GetSingleInputName(querySpecification);
-        var fields = ParseSelectFields(querySpecification, inputName);
+        var selectFields = ParseSelectFields(querySpecification, inputName);
         var timestampBy = ParseTimestampBy(querySpecification, inputName);
 
-        return new SqlPlan(selectStatement.ToString(), inputName, outputName, timestampBy, fields);
+        return new SqlPlan(
+            selectStatement.ToString(),
+            inputName,
+            outputName,
+            timestampBy,
+            selectFields.SelectAll,
+            selectFields.Fields);
     }
 
     private static void ValidateQuerySpecification(QuerySpecification querySpecification)
@@ -108,7 +114,9 @@ public static class SqlParser
         }
     }
 
-    private static IReadOnlyList<SelectFieldDefinition> ParseSelectFields(QuerySpecification querySpecification, string inputName)
+    private static (bool SelectAll, IReadOnlyList<SelectFieldDefinition> Fields) ParseSelectFields(
+        QuerySpecification querySpecification,
+        string inputName)
     {
         if (querySpecification.SelectElements.Count == 0)
         {
@@ -120,7 +128,12 @@ public static class SqlParser
         {
             if (element is SelectStarExpression)
             {
-                throw new InvalidOperationException("SELECT * is not supported.");
+                if (querySpecification.SelectElements.Count != 1)
+                {
+                    throw new InvalidOperationException("SELECT * cannot be combined with other fields.");
+                }
+
+                return (true, Array.Empty<SelectFieldDefinition>());
             }
 
             if (element is not SelectScalarExpression scalar)
@@ -138,7 +151,7 @@ public static class SqlParser
             fields.Add(new SelectFieldDefinition(field, outputName));
         }
 
-        return fields;
+        return (false, fields);
     }
 
     private static FieldReference BuildFieldReference(ColumnReferenceExpression expression, string? inputName)
