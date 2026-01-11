@@ -142,6 +142,9 @@ public sealed class ChronosQLEngine
     public CompiledQuery Compile(SqlPlan plan)
         => _compiler.Compile(plan);
 
+    public CompiledScriptQuery Compile(SqlScriptPlan plan)
+        => _compiler.Compile(plan);
+
     public StreamingQuery CreateStreamingQuery(CompiledQuery compiledQuery)
         => new StreamingQuery(compiledQuery);
 

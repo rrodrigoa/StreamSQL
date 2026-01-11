@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -54,6 +55,42 @@ public sealed class QueryCompiler
             .CreateDelegate(typeof(Func<IAsyncEnumerable<InputEvent>, ChannelWriter<JsonElement>, CancellationToken, Task>));
 
         return new CompiledQuery(runner, source);
+    }
+
+    public CompiledScriptQuery Compile(SqlScriptPlan plan)
+    {
+        ScriptQuerySourceGenerator generator = new ScriptQuerySourceGenerator(plan);
+        string source = generator.Generate();
+
+        string engineID = $"ChronosQL.Generated.{Guid.NewGuid():N}";
+        File.WriteAllTextAsync($"./{engineID}.cs", source);
+
+        var syntaxTree = CSharpSyntaxTree.ParseText(source);
+        var compilation = CSharpCompilation.Create(
+                assemblyName: engineID,
+                syntaxTrees: new[] { syntaxTree },
+                references: _references,
+                options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, optimizationLevel: OptimizationLevel.Debug));
+
+        using MemoryStream assemblyStream = new MemoryStream();
+        var emitResult = compilation.Emit(assemblyStream);
+        if (!emitResult.Success)
+        {
+            var diagnostics = string.Join(Environment.NewLine, emitResult.Diagnostics.Select(diagnostic => diagnostic.ToString()));
+            throw new InvalidOperationException($"Query compilation failed:{Environment.NewLine}{diagnostics}");
+        }
+
+        assemblyStream.Position = 0;
+        var assembly = Assembly.Load(assemblyStream.ToArray());
+        var type = assembly.GetType("ChronosQL.Generated.QueryProgram")
+                   ?? throw new InvalidOperationException("Compiled query did not contain QueryProgram type.");
+        var method = type.GetMethod("ExecuteAsync", BindingFlags.Public | BindingFlags.Static)
+                     ?? throw new InvalidOperationException("Compiled query did not contain ExecuteAsync method.");
+
+        var runner = (Func<IReadOnlyDictionary<string, IAsyncEnumerable<InputEvent>>, IReadOnlyDictionary<string, ChannelWriter<JsonElement>>, CancellationToken, Task>)method
+            .CreateDelegate(typeof(Func<IReadOnlyDictionary<string, IAsyncEnumerable<InputEvent>>, IReadOnlyDictionary<string, ChannelWriter<JsonElement>>, CancellationToken, Task>));
+
+        return new CompiledScriptQuery(runner, source);
     }
 
     private static IReadOnlyList<MetadataReference> BuildMetadataReferences()
