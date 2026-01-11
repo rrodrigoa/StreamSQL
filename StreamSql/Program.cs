@@ -10,6 +10,7 @@ public static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        System.Diagnostics.Debugger.Launch();
         if (!CommandLineOptions.TryParse(args, out var options, out var error))
         {
             Console.Error.WriteLine(error);

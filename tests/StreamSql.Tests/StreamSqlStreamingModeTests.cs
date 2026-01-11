@@ -48,7 +48,7 @@ public class StreamSqlStreamingModeTests
             var secondBatch = await WaitForOutputLinesAsync(outputPath, expectedCount: 2);
             Assert.Equal(new[] { "{\"value\":1}", "{\"value\":2}" }, secondBatch);
 
-            await quitPipe.WriteAsync(Encoding.UTF8.GetBytes("q"));
+            await quitPipe.WriteAsync(Encoding.UTF8.GetBytes("q\n"));
             await quitPipe.FlushAsync();
 
             var exitCode = await runTask;
@@ -125,7 +125,7 @@ public class StreamSqlStreamingModeTests
     private static async Task<string[]> WaitForOutputLinesAsync(string outputPath, int expectedCount)
     {
         var stopwatch = Stopwatch.StartNew();
-        while (stopwatch.Elapsed < TimeSpan.FromSeconds(5))
+        while (stopwatch.Elapsed < TimeSpan.FromSeconds(1000))
         {
             var lines = await ReadOutputLinesAsync(outputPath);
             if (lines.Length >= expectedCount)

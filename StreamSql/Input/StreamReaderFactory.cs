@@ -28,7 +28,7 @@ public static class StreamReaderFactory
         {
             Access = FileAccess.Read,
             Mode = FileMode.Open,
-            Share = FileShare.ReadWrite,
+            Share = FileShare.Write,
             Options = FileOptions.Asynchronous | FileOptions.SequentialScan
         });
     }
