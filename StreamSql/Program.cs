@@ -1,3 +1,6 @@
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Channels;
 using ChronosQL.Engine;
 using ChronosQL.Engine.Sql;
 using StreamSql.Cli;
@@ -29,10 +32,10 @@ public static class Program
             Follow = options.ReadMode != InputReadMode.Normal
         });
 
-        SqlPlan plan;
+        SqlScriptPlan scriptPlan;
         try
         {
-            plan = engine.Parse(sqlText);
+            scriptPlan = engine.ParseScript(sqlText);
         }
         catch (Exception ex)
         {
@@ -40,16 +43,31 @@ public static class Program
             return 1;
         }
 
-        if (!options.Inputs.TryGetValue(plan.InputName, out var inputSource))
+        var requiredInputs = scriptPlan.Statements
+            .Select(statement => statement.InputName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var requiredOutputs = scriptPlan.Statements
+            .Select(statement => statement.OutputName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        foreach (var inputName in requiredInputs)
         {
-            Console.Error.WriteLine($"SELECT references unknown input '{plan.InputName}'.");
-            return 1;
+            if (!options.Inputs.ContainsKey(inputName))
+            {
+                Console.Error.WriteLine($"SELECT references unknown input '{inputName}'.");
+                return 1;
+            }
         }
 
-        if (!options.Outputs.TryGetValue(plan.OutputName, out var outputDestination))
+        foreach (var outputName in requiredOutputs)
         {
-            Console.Error.WriteLine($"SELECT references unknown output '{plan.OutputName}'.");
-            return 1;
+            if (!options.Outputs.ContainsKey(outputName))
+            {
+                Console.Error.WriteLine($"SELECT references unknown output '{outputName}'.");
+                return 1;
+            }
         }
 
         using var shutdown = new CancellationTokenSource();
@@ -59,21 +77,56 @@ public static class Program
 
         try
         {
-            await using var inputStream = StreamReaderFactory.OpenInput(inputSource);
-            await using var outputStream = StreamReaderFactory.OpenOutput(outputDestination);
-            var reader = new JsonLineReader(inputStream, options.ReadMode, inputSource.Path);
-            var writer = new JsonLineWriter(outputStream);
+            var inputStreams = new Dictionary<string, Stream>(StringComparer.OrdinalIgnoreCase);
+            var outputStreams = new Dictionary<string, Stream>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                var outputChannels = new Dictionary<string, Channel<JsonElement>>(StringComparer.OrdinalIgnoreCase);
+                var inputEnumerables = new Dictionary<string, IAsyncEnumerable<InputEvent>>(StringComparer.OrdinalIgnoreCase);
+                var outputWriterTasks = new List<Task>();
 
-            if (options.ReadMode == InputReadMode.Normal)
-            {
-                var inputEvents = await reader.ReadAllToListAsync(shutdown.Token);
-                var results = await engine.ExecuteBatchAsync(plan, inputEvents, shutdown.Token);
-                await writer.WriteAllAsync(results, shutdown.Token);
+                foreach (var inputName in requiredInputs)
+                {
+                    var inputSource = options.Inputs[inputName];
+                    var inputStream = StreamReaderFactory.OpenInput(inputSource);
+                    inputStreams[inputName] = inputStream;
+                    var reader = new JsonLineReader(inputStream, options.ReadMode, inputSource.Path);
+                    inputEnumerables[inputName] = reader.ReadAllAsync(shutdown.Token);
+                }
+
+                foreach (var outputName in requiredOutputs)
+                {
+                    var outputDestination = options.Outputs[outputName];
+                    var outputStream = StreamReaderFactory.OpenOutput(outputDestination);
+                    outputStreams[outputName] = outputStream;
+                    var writer = new JsonLineWriter(outputStream);
+                    var channel = Channel.CreateUnbounded<JsonElement>(new UnboundedChannelOptions
+                    {
+                        SingleReader = true,
+                        SingleWriter = false
+                    });
+                    outputChannels[outputName] = channel;
+                    outputWriterTasks.Add(writer.WriteAllAsync(channel.Reader.ReadAllAsync(shutdown.Token), shutdown.Token));
+                }
+
+                var compiled = engine.Compile(scriptPlan);
+                var executionTask = compiled.ExecuteAsync(
+                    inputEnumerables,
+                    outputChannels.ToDictionary(entry => entry.Key, entry => entry.Value.Writer),
+                    shutdown.Token);
+                await Task.WhenAll(outputWriterTasks.Append(executionTask)).ConfigureAwait(false);
             }
-            else
+            finally
             {
-                var results = engine.ExecuteAsync(plan, reader.ReadAllAsync(shutdown.Token), shutdown.Token);
-                await writer.WriteAllAsync(results, shutdown.Token);
+                foreach (var stream in inputStreams.Values)
+                {
+                    await stream.DisposeAsync().ConfigureAwait(false);
+                }
+
+                foreach (var stream in outputStreams.Values)
+                {
+                    await stream.DisposeAsync().ConfigureAwait(false);
+                }
             }
         }
         catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
