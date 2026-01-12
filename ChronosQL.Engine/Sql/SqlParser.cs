@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using Microsoft.SqlServer.TransactSql.ScriptDom;
 
@@ -66,23 +67,20 @@ public static class SqlParser
         var inputName = GetSingleInputName(querySpecification);
         var selectFields = ParseSelectFields(querySpecification, inputName);
         var timestampBy = ParseTimestampBy(querySpecification, inputName);
+        var whereCondition = ParseWhereCondition(querySpecification, inputName);
 
         return new SqlPlan(
             selectStatement.ToString(),
             inputName,
             outputName,
             timestampBy,
+            whereCondition,
             selectFields.SelectAll,
             selectFields.Fields);
     }
 
     private static void ValidateQuerySpecification(QuerySpecification querySpecification)
     {
-        if (querySpecification.WhereClause is not null)
-        {
-            throw new InvalidOperationException("WHERE clauses are not supported.");
-        }
-
         if (querySpecification.GroupByClause is not null)
         {
             throw new InvalidOperationException("GROUP BY clauses are not supported.");
@@ -287,5 +285,168 @@ public static class SqlParser
         {
             yield return statementFragment;
         }
+    }
+
+    private static SqlCondition? ParseWhereCondition(QuerySpecification querySpecification, string inputName)
+    {
+        if (querySpecification.WhereClause?.SearchCondition is null)
+        {
+            return null;
+        }
+
+        return ParseCondition(querySpecification.WhereClause.SearchCondition, inputName);
+    }
+
+    private static SqlCondition ParseCondition(BooleanExpression expression, string inputName)
+    {
+        switch (expression)
+        {
+            case BooleanBinaryExpression binary:
+                return new SqlBinaryCondition(
+                    ParseCondition(binary.FirstExpression, inputName),
+                    MapBinaryOperator(binary.BinaryExpressionType),
+                    ParseCondition(binary.SecondExpression, inputName));
+            case BooleanParenthesisExpression parenthesis:
+                return ParseCondition(parenthesis.Expression, inputName);
+            case BooleanNotExpression notExpression:
+                return new SqlNotCondition(ParseCondition(notExpression.Expression, inputName));
+            case BooleanComparisonExpression comparison:
+                return new SqlPredicateCondition(new SqlComparisonPredicate(
+                    ParseScalarExpression(comparison.FirstExpression, inputName),
+                    MapComparisonOperator(comparison.ComparisonType),
+                    ParseScalarExpression(comparison.SecondExpression, inputName)));
+            case BooleanIsNullExpression isNullExpression:
+                return new SqlPredicateCondition(new SqlIsNullPredicate(
+                    ParseScalarExpression(isNullExpression.Expression, inputName),
+                    GetBooleanProperty(isNullExpression, "IsNot")));
+            case LikePredicate likePredicate:
+                return new SqlPredicateCondition(new SqlLikePredicate(
+                    ParseScalarExpression(GetScalarProperty(likePredicate, "Expression", "FirstExpression"), inputName),
+                    ParseScalarExpression(GetScalarProperty(likePredicate, "Pattern", "SecondExpression"), inputName),
+                    GetBooleanProperty(likePredicate, "NotDefined")));
+            case BetweenPredicate betweenPredicate:
+                return new SqlPredicateCondition(new SqlBetweenPredicate(
+                    ParseScalarExpression(GetScalarProperty(betweenPredicate, "Expression", "FirstExpression"), inputName),
+                    ParseScalarExpression(GetScalarProperty(betweenPredicate, "LowerExpression", "SecondExpression"), inputName),
+                    ParseScalarExpression(GetScalarProperty(betweenPredicate, "UpperExpression", "ThirdExpression"), inputName),
+                    GetBooleanProperty(betweenPredicate, "NotDefined")));
+            case InPredicate inPredicate:
+                return new SqlPredicateCondition(ParseInPredicate(inPredicate, inputName));
+            default:
+                throw new InvalidOperationException($"Unsupported WHERE condition: {expression.GetType().Name}.");
+        }
+    }
+
+    private static SqlPredicate ParseInPredicate(InPredicate predicate, string inputName)
+    {
+        var values = GetValuesProperty(predicate, "Values");
+        var subquery = GetPropertyValue<TSqlSubquery>(predicate, "Subquery");
+        if (subquery is not null)
+        {
+            throw new InvalidOperationException("IN subqueries are not supported.");
+        }
+
+        if (values is null || values.Count == 0)
+        {
+            throw new InvalidOperationException("IN requires at least one value.");
+        }
+
+        var parsedValues = values
+            .Select(value => ParseScalarExpression(value, inputName))
+            .ToList();
+
+        return new SqlInPredicate(
+            ParseScalarExpression(GetScalarProperty(predicate, "Expression", "FirstExpression"), inputName),
+            parsedValues,
+            GetBooleanProperty(predicate, "NotDefined"));
+    }
+
+    private static SqlExpression ParseScalarExpression(ScalarExpression expression, string inputName)
+    {
+        switch (expression)
+        {
+            case ColumnReferenceExpression columnReference:
+                return new SqlFieldExpression(BuildFieldReference(columnReference, inputName));
+            case StringLiteral stringLiteral:
+                return new SqlLiteralExpression(new SqlLiteral(SqlLiteralKind.String, stringLiteral.Value, null, null));
+            case IntegerLiteral integerLiteral:
+                return new SqlLiteralExpression(new SqlLiteral(
+                    SqlLiteralKind.Number,
+                    null,
+                    double.Parse(integerLiteral.Value, CultureInfo.InvariantCulture),
+                    null));
+            case NumericLiteral numericLiteral:
+                return new SqlLiteralExpression(new SqlLiteral(
+                    SqlLiteralKind.Number,
+                    null,
+                    double.Parse(numericLiteral.Value, CultureInfo.InvariantCulture),
+                    null));
+            case MoneyLiteral moneyLiteral:
+                return new SqlLiteralExpression(new SqlLiteral(
+                    SqlLiteralKind.Number,
+                    null,
+                    double.Parse(moneyLiteral.Value, CultureInfo.InvariantCulture),
+                    null));
+            case NullLiteral:
+                return new SqlLiteralExpression(new SqlLiteral(SqlLiteralKind.Null, null, null, null));
+            case BooleanLiteral booleanLiteral:
+                return new SqlLiteralExpression(new SqlLiteral(SqlLiteralKind.Boolean, null, null, booleanLiteral.Value));
+            default:
+                throw new InvalidOperationException($"Unsupported expression in WHERE clause: {expression.GetType().Name}.");
+        }
+    }
+
+    private static SqlBinaryOperator MapBinaryOperator(BooleanBinaryExpressionType type)
+        => type switch
+        {
+            BooleanBinaryExpressionType.And => SqlBinaryOperator.And,
+            BooleanBinaryExpressionType.Or => SqlBinaryOperator.Or,
+            _ => throw new InvalidOperationException($"Unsupported boolean operator: {type}.")
+        };
+
+    private static SqlComparisonOperator MapComparisonOperator(BooleanComparisonType type)
+        => type switch
+        {
+            BooleanComparisonType.Equals => SqlComparisonOperator.Equal,
+            BooleanComparisonType.GreaterThan => SqlComparisonOperator.GreaterThan,
+            BooleanComparisonType.GreaterThanOrEqualTo => SqlComparisonOperator.GreaterThanOrEqual,
+            BooleanComparisonType.LessThan => SqlComparisonOperator.LessThan,
+            BooleanComparisonType.LessThanOrEqualTo => SqlComparisonOperator.LessThanOrEqual,
+            BooleanComparisonType.NotEqualToBrackets => SqlComparisonOperator.NotEqual,
+            BooleanComparisonType.NotEqualToExclamation => SqlComparisonOperator.NotEqual,
+            BooleanComparisonType.NotGreaterThan => SqlComparisonOperator.NotGreaterThan,
+            BooleanComparisonType.NotLessThan => SqlComparisonOperator.NotLessThan,
+            _ => throw new InvalidOperationException($"Unsupported comparison operator: {type}.")
+        };
+
+    private static ScalarExpression GetScalarProperty(object instance, params string[] propertyNames)
+    {
+        var expression = GetPropertyValue<ScalarExpression>(instance, propertyNames);
+        if (expression is null)
+        {
+            throw new InvalidOperationException($"Unsupported predicate shape for {instance.GetType().Name}.");
+        }
+
+        return expression;
+    }
+
+    private static IList<ScalarExpression>? GetValuesProperty(object instance, params string[] propertyNames)
+        => GetPropertyValue<IList<ScalarExpression>>(instance, propertyNames);
+
+    private static bool GetBooleanProperty(object instance, params string[] propertyNames)
+        => GetPropertyValue<bool>(instance, propertyNames);
+
+    private static T? GetPropertyValue<T>(object instance, params string[] propertyNames)
+    {
+        foreach (var name in propertyNames)
+        {
+            var property = instance.GetType().GetProperty(name);
+            if (property?.GetValue(instance) is T value)
+            {
+                return value;
+            }
+        }
+
+        return default;
     }
 }

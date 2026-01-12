@@ -9,6 +9,7 @@ public sealed record SqlPlan(
     string InputName,
     string OutputName,
     TimestampByDefinition? TimestampBy,
+    SqlCondition? WhereCondition,
     bool SelectAll,
     IReadOnlyList<SelectFieldDefinition> SelectFields);
 
