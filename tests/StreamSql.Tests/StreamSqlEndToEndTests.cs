@@ -84,6 +84,46 @@ public class StreamSqlEndToEndTests
     }
 
     [Fact]
+    public async Task ExecutesWhereClause()
+    {
+        var sql = "SELECT data.value INTO output FROM input WHERE data.value > 10";
+        var input = string.Join('\n', new[]
+        {
+            "{\"data\":{\"value\":5}}",
+            "{\"data\":{\"value\":12}}",
+            "{\"data\":{\"value\":20}}"
+        }) + "\n";
+
+        var inputPath = Path.GetTempFileName();
+        var outputPath = Path.GetTempFileName();
+
+        try
+        {
+            await File.WriteAllTextAsync(inputPath, input);
+            await File.WriteAllTextAsync(outputPath, string.Empty);
+
+            var args = new[]
+            {
+                "--query", sql,
+                "--input", $"input={inputPath}",
+                "--output", $"output={outputPath}"
+            };
+
+            var exitCode = await Program.Main(args);
+            Assert.Equal(0, exitCode);
+
+            var lines = (await File.ReadAllTextAsync(outputPath))
+                .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(new[] { "{\"value\":12}", "{\"value\":20}" }, lines);
+        }
+        finally
+        {
+            File.Delete(inputPath);
+            File.Delete(outputPath);
+        }
+    }
+
+    [Fact]
     public async Task ExecutesMultipleStatements()
     {
         var sql = string.Join(Environment.NewLine, new[]

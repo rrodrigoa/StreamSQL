@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text;
 using ChronosQL.Engine.Sql;
 
@@ -19,6 +20,10 @@ internal sealed class ScriptQuerySourceGenerator
         builder.AppendLine("using System.Collections.Generic;");
         builder.AppendLine("using System.IO;");
         builder.AppendLine("using System.Text.Json;");
+        if (_plan.Statements.Any(statement => statement.WhereCondition is not null))
+        {
+            builder.AppendLine("using System.Text.RegularExpressions;");
+        }
         builder.AppendLine("using System.Threading;");
         builder.AppendLine("using System.Threading.Channels;");
         builder.AppendLine("using System.Threading.Tasks;");
